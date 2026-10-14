@@ -1,76 +1,36 @@
-# steam-vr-wheel
-Wheel emulation using steamVR
-=============================
+# steam-vr-wheel (hotaslike fork)
 
+**個人用の実験フォークです。配布・紹介・転載はしないでください。**
+**Personal experimental fork. Please do not share, promote, or redistribute it.**
 
+- 実験段階です。壊れます。仕様も予告なく変わります。
+- コードの多くは LLM (AI) との作業で書いたものです。中身の保証はありません。
+- 質問・要望・Issue には答えません。使うなら自己責任でどうぞ。
 
-News
-=============================
-I've got a wheel and hotas recently, and haven't had much time to work on this anyway. It will continue to work thanks to SteamVR good backward compatability, but don't expect any further updates. If anyone wants to fork and keep developing maintaining this app, they are free to do so under MIT licence.
+## なにか
 
+[steam-vr-wheel](https://github.com/mdovgialo/steam-vr-wheel) 2.5.4a の改造版。
+VR コントローラーで操縦桿とスロットルを動かし、vJoy に出します。SACC 風の HUD を SteamVR オーバーレイで出します。
 
-If you just want to use this go to:
-===================================
-https://github.com/mdovgialo/steam-vr-wheel/releases
+## 動かす
 
+要るもの: Windows / SteamVR / vJoy / Python 3.5.3 (64bit)。ライブラリは [DEPENDENCIES.md](DEPENDENCIES.md)。
 
-For developers:
-================
-
-Requires pyopenvr, wxpython (codename phoenix), and vjoy ( http://vjoystick.sourceforge.net/site/ Public domain )
-
-Uses pyvjoy binding from https://github.com/tidzo/pyvjoy
-
-Demos:
-======
-
-Wheel mode:
-https://www.youtube.com/watch?v=lb0zGBVwN4Y
-
-Joystick mode:
-https://www.youtube.com/watch?v=jjb92HQ0M74
-
-
-
-
-
-
-Instalation from sources (for developers):
-========================================
-install python 3.5+
-
-install vjoy
-
-with admin level cmd go to folder where is steam_vr_wheel
-
-write:
-
+```
 pip install .
-
-
-
-
-To run:
-=======
-open cmd, write:
-
-vrwheel
-
-or 
-
 vrjoystick
+```
 
-or 
+止めるときはコンソールで Ctrl+C。
 
-vrpad
+## さわりかた
 
-For configurator - write
+- 右グリップでつかむ → 操縦桿
+- 左グリップでつかむ → スロットル
+- 左のタッチパッド / アプリメニューに触れる → 十字キー (POV)
+- コンソールのキー: `C` 手首の計測、`H` HUD の位置合わせ、`F` HUD の見せ方切り替え、`L` ログ表示切り替え (ほかは `steam_vr_wheel/_joystick.py` の先頭)
 
-vrpadconfig
+## ライセンス
 
-press ctrl+c to stop
-
-To uninstall:
-
-pip uninstall steam_vr_wheel
-
+元の steam-vr-wheel (mdovgialo) と同じ MIT。[LICENSE](LICENSE) を見てください。
+フォントなどの表記は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
