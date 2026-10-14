@@ -49,3 +49,22 @@ SOFTWARE.
 
   The font file itself carries the notice "Copyright (c) 2025, Dean Tersigni."
   All rights not granted by the author remain with the author.
+
+## Python libraries in `Lib.zip`
+
+`Lib.zip` bundles Python packages the program needs. Each package is
+included unmodified under its own license; the license files shipped with
+the packages are kept inside the archive.
+
+| Package | Version | License | Source |
+|---|---|---|---|
+| PyOpenGL | 3.1.10 | BSD | https://github.com/mcfletch/pyopengl |
+| glfw (pyGLFW) | 2.10.2 | MIT | https://github.com/FlorianRhiem/pyGLFW |
+| Pillow | 7.2.0 | HPND | https://python-pillow.org |
+| pip | 20.3.4 | MIT | https://pip.pypa.io/ |
+| setuptools | 50.3.2 | MIT | https://github.com/pypa/setuptools |
+| wheel | 0.37.1 | MIT | https://github.com/pypa/wheel |
+
+PyOpenGL also ships freeglut (MIT-style, `OpenGL/DLLS/freeglut_COPYING.txt`)
+and GLE (IBM example source license, or GPL v2 at your choice; see
+`OpenGL/DLLS/gle_COPYING`).
