@@ -56,6 +56,9 @@ pyopenvr は、メンテナンスの段階で新しい版への更新を検討�
 このほか、ゲームへの出力に **vJoy (ドライバ)** が要ります。
 `steam_vr_wheel/pyvjoy/vJoyInterface.dll` は同梱済みですが、ドライバ本体は別途インストールしてください。
 
+pyvjoy (pip の `pyvjoy`) は入れなくて構いません。
+リポジトリの `steam_vr_wheel/pyvjoy/` に同梱した版を使っており (`steam_vr_wheel.pyvjoy` として import)、pip 版は読み込まれません。
+
 ## 3. 入れ方
 
 1. Python 3.5.3 64bit ポータブル版のフォルダを開き (`python.exe` がある所)、コマンドプロンプトを開く。
