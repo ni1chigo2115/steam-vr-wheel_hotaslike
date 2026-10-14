@@ -1,7 +1,42 @@
 # steam-vr-wheel (hotaslike fork)
 
-**個人用の実験フォークです。配布・紹介・転載はしないでください。**
 **Personal experimental fork. Please do not share, promote, or redistribute it.**
+
+- Only aims at extending the joystick mode. Wheel and other modes are not maintained.
+- Experimental. Things break and change without notice.
+- Much of the code was written with LLM (AI) assistance. No guarantees.
+- No support. Issues and questions will not be answered. Use at your own risk.
+
+Fork of [steam-vr-wheel](https://github.com/mdovgialo/steam-vr-wheel) 2.5.4a.
+VR controllers as a flight stick and throttle (vJoy output), with a HUD as a SteamVR overlay.
+
+## Run
+
+Needs Windows, SteamVR, vJoy, Python 3.5.3 (64bit). Libraries: [DEPENDENCIES.md](DEPENDENCIES.md).
+
+```
+pip install .
+vrjoystick
+```
+
+Ctrl+C in the console to stop.
+
+## Controls
+
+- Right grip: grab the stick
+- Left grip: grab the throttle
+- Touch left touchpad / app menu: POV (d-pad)
+- Console keys: `C` wrist calibration, `H` HUD recenter, `F` HUD mode, `L` log view (others: top of `steam_vr_wheel/_joystick.py`)
+
+## License
+
+MIT, same as the original steam-vr-wheel (mdovgialo). See [LICENSE](LICENSE).
+Fonts and other notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+<details>
+<summary>ja</summary>
+
+**個人用の実験フォークです。配布・紹介・転載はしないでください。**
 
 - ジョイスティック (操縦桿・スロットル) の拡張だけが目的です。ハンドル (wheel) などの機能は手入れしていません。
 - 実験段階です。壊れます。仕様も予告なく変わります。
@@ -35,3 +70,5 @@ vrjoystick
 
 元の steam-vr-wheel (mdovgialo) と同じ MIT。[LICENSE](LICENSE) を見てください。
 フォントなどの表記は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+</details>
