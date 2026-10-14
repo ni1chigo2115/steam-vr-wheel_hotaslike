@@ -36,25 +36,42 @@ pip / setuptools / wheel (と付属の `pkg_resources`, `_distutils_hack`) は�
 ただし `pip install .` で steam_vr_wheel 自体をインストールし直すときには setuptools が要ります。
 pip で何か追加する予定があるなら、残しておくのが無難です。
 
-## 2. `Lib.zip` に入っていないが必須のもの
+## 2. 環境構築時に入れる必要があるもの (`Lib.zip` には入っていない)
+
+次の3つはビルド (ポータブル環境の構築) の時点で必須です。
+古い環境からコピーするより、新しいポータブル環境に改めて pip で入れるほうが安全です。
 
 | パッケージ | 版 | 何に使うか |
 |---|---|---|
-| **pyopenvr** (`openvr`) | **1.0.0701** | SteamVR との通信全般。新しい版は API が違うので、この版に固定 |
-| numpy | (元の環境のもの) | `wheel.py` が `_wheel.py` を起動時に読み込み、そこで import している |
-| wxPython | (元の環境のもの、setup.py では 4.0.0a3) | `wheel.py` が `configurator.py` を起動時に読み込み、そこで import している |
-| vJoy (ドライバ) | — | ゲームへの出力。`steam_vr_wheel/pyvjoy/vJoyInterface.dll` を同梱済み。ドライバ本体は別途インストール |
+| **pyopenvr** (`openvr`) | **1.0.0701** (固定) | SteamVR との通信全般。新しい版は API が違うので、この版に固定 |
+| **numpy** | Python 3.5 で動く版 (1.18.x まで) | `wheel.py` が `_wheel.py` を起動時に読み込み、そこで import している |
+| **wxPython** | Python 3.5 で動く版 (4.0.x 系) | `wheel.py` が `configurator.py` を起動時に読み込み、そこで import している |
 
 numpy と wxPython はジョイスティックモードでは中身を使っていませんが、
 `wheel.py` の先頭で読み込まれるので、無いと起動できません。
-元の steam-vr-wheel のポータブル環境にはこの3つが入っているはずです。
+
+pyopenvr は、メンテナンスの段階で新しい版への更新を検討する予定です (今は後回し)。
+更新するときは API の違いに合わせてコードの修正が要ります。それまでは 1.0.0701 から変えないでください。
+
+このほか、ゲームへの出力に **vJoy (ドライバ)** が要ります。
+`steam_vr_wheel/pyvjoy/vJoyInterface.dll` は同梱済みですが、ドライバ本体は別途インストールしてください。
 
 ## 3. 入れ方
 
-1. Python 3.5.3 64bit ポータブル版のフォルダを開く (`python.exe` がある所)。
+1. Python 3.5.3 64bit ポータブル版のフォルダを開き (`python.exe` がある所)、コマンドプロンプトを開く。
 2. `Lib.zip` を展開し、中の `Lib\site-packages\` の中身を、Python 側の `Lib\site-packages\` にコピーする。
-   - 既にある `openvr`, `numpy`, `wx` などは消さないこと (フォルダごと置き換えない)。
-3. 確認: そのフォルダでコマンドプロンプトを開き、次を実行してエラーが出なければ OK。
+   - 先にこれを行うと pip が 20.3.4 になり、次の手順のインストールが通りやすくなります
+     (Python 3.5.3 付属の pip は古い版です)。
+   - 既に入っているパッケージがあればフォルダごと置き換えず、中身を上書きコピーしてください。
+3. 環境構築時に必須の3つを入れる。
+
+   ```
+   python -m pip install openvr==1.0.0701 numpy wxPython
+   ```
+
+   pip が Python 3.5 で動く版を自動で選びます。うまくいかない場合は
+   `numpy==1.18.5` `wxPython==4.0.7.post2` のように版を指定してください (この2つの版は未検証の目安です)。
+4. 確認: 次を実行してエラーが出なければ OK。
 
    ```
    python -c "import glfw, OpenGL.GL, PIL, openvr, numpy, wx; print(glfw.__version__, OpenGL.__version__, PIL.__version__)"
