@@ -50,6 +50,7 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
   0.1.6: 上の DPAD1～JIT1 (調査用の段とキー、AC風の見た目) をまとめて master に入れた。十字キーのアイコンもミント版
     (cross_pov_aa_mint.png) にして、ほかの HUD の色とそろえた。*_mint.png は make_mint_png.py (リポジトリの一番上。steam_vr_wheel の1つ上で実行) で作ったもの。
     デバッグのキーと CSV の仕様は docs/デバッグ機能.md にもまとめてある。
+  0.1.7: 通知の段に現在時刻 (時:分:秒、PC の時計) の段を足した (HUD_CLOCK_*)。動画や CSV と見比べるため。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -152,7 +153,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.6'                      # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.7'                      # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -337,6 +338,22 @@ def hud_row_cruise():
                       {'text_fn': hud_text_cruise_power, 'reserve': '100%', 'align': 'right'}]}
 
 
+HUD_CLOCK_ENABLED = True                   # [CONFIG] 通知の段に現在時刻 (PC の時計、時:分:秒) を出す。動画・CSV・ログと見比べる目印
+HUD_CLOCK_FORMAT = '%H:%M:%S'              # [CONFIG] time.strftime の書式。Hornet は大文字・数字・':' '.' '-' は描ける
+
+
+def hud_text_clock(v):
+    """現在時刻 (HUD_CLOCK_FORMAT)。秒が変わったときだけ文字が変わるので、描き直しは 1 秒に 1 回増えるだけ。"""
+    return time.strftime(HUD_CLOCK_FORMAT)
+
+
+def hud_row_clock():
+    """現在時刻の段 (いつも出す)。幅は '00:00:00' 分で固定。"""
+    return {'id': 'clock', 'on': ['sig:always'],
+            'parts': [{'text_fn': hud_text_clock, 'reserve': '00:00:00',
+                       'align': 'left'}]}
+
+
 def hud_rows_font_test():
     """フォント確認用の段 (HUD_FONT_TEST が True のときだけ出す)。"""
     on = ['sig:font_test']
@@ -420,7 +437,7 @@ HUD_FONT_TEST = True                       # [CONFIG] フォント確認用の�
 HUD_NOTICE_ROWS = [                        # [CONFIG] 上から並べる順番
     hud_row_bmark(),
     hud_row_cruise(),
-] + hud_rows_dpad_debug() + (hud_rows_font_test() if HUD_FONT_TEST else [])   # 数値の段をアイコンの段より上に (DPAD2)
+] + ([hud_row_clock()] if HUD_CLOCK_ENABLED else []) + hud_rows_dpad_debug() + (hud_rows_font_test() if HUD_FONT_TEST else [])   # 数値の段をアイコンの段より上に (DPAD2)
 
 # --- 半透明の薄板 (HUD表示部分だけの裏に敷く。ゲーム画面は隠さない) -----------------------
 HUD_PANEL_ENABLED = True                   # [CONFIG] 薄板を付けるか
