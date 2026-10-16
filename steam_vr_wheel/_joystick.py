@@ -23,10 +23,33 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     - T : 'fakefar' のずらしの予測を「次に合成される画面が光る時刻」/「常に一定時間先」で切り替え (HUD_LATE_SHIFT_VSYNC_TARGET)
     - V : 'fakefar' のずらしの切り替えを、絵のコピー完了から 0/1/2/3 vsync 後に (HUD_LATE_SHIFT_SWITCH_VSYNC)
     - [ / ] : 頭の位置の予測に足す時間を -2ms / +2ms (HUD_DEPTH_PREDICT_EXTRA_SEC)。\\ で 0 に戻す
+    - P / O : (調査用) スティックの数値の段を出す / 隠す、[DPAD] の1行ログを出す / 止める
+    - K / X / J : (HUD 揺れ調査用 JIT1) ずらしの入/切、絵の描き直しを絞る、調査用 CSV の記録 (下の版の説明を参照)
     - L : HUD のデバッグログを 普通 → 大きく → 隠す (コマンド 'hud_log_cycle')。ほかに 'hud_log_toggle' / 'hud_log_clear' / 'version' (キーなし)
   システム名とバージョン: APP_NAME ('SteamVR Virtual Cockpit') / APP_VERSION / APP_BASE_VERSION。
     起動時にコンソールへ表示。HUD は起動時に中央へ大きく出して消え (HUD_SPLASH_*、コマンド 'version' で出し直す)、
     通知の段 (Bマーク) の数段上 = HUD の右上の端に 'V0.1.5' の形で、右揃えで常に出す (HUD_VERSION_*)。変更を配るたびに APP_VERSION を上げること。
+  0.1.5-DPAD1 (Q29-3 調査用、マージしない): 通知の段の下に、左右のサムスティックの生の値と VirtualDPad の判定の中身を
+    出す段を足した (DPAD_DEBUG_*、P キー = コマンド 'dpad_debug' で出す / 隠す)。方向が変わるたびに [DPAD] の1行をログに出す。
+  0.1.5-DPAD2: 数値の段をフォント確認 (アイコン) の段より上に移した。
+  0.1.5-DPAD2-AC: 上に HUD 視認性の AC 風テスト (design/hud_readability/test_ac_look/hud_look_ac_test.patch:
+    ミント色・不透明度 0.85・にじみ 5px/0.35・ぼかし 0.3、*_mint.png) を重ねたテスト版。
+  0.1.5-DPAD3-AC: 左の操作インジケーターの十字キーアイコン (HUD_POV_FILE) だけ元の cross_pov_aa.png に戻した。
+  0.1.5-DPAD3-AC-JIT1 (HUD 揺れ調査用): 実機でその場で切り替えて試すキーを足した。
+    O = [DPAD] の1行ログを出す / 止める (DPAD_DEBUG_LOG)。P (数値の段) と合わせて切ると、スティックのログが消える。
+    K = HUD_LATE_SHIFT (ずらし) を入 / 切。
+    X = 'fakefar' の絵の描き直しを 通常 → 10回/秒 → 5回/秒 → 1回/秒 → 通常 に絞る (HUD_TEXTURE_FREEZE_HZ)。
+        ずらしは今まで通り約 650回/秒。絞って高負荷でも揺れが消えれば「絵とずらしの切り替えのずれ」が原因と分かる。
+        絞っている間は前後の動き (拡大縮小) と回転が遅れて見えるが、それは正常 (調べたいのは上下左右の小さな跳び)。
+    J = 調査用 CSV (HUD_JITTER_CSV_*) の記録を始める / 止める。1行 = 1つの出来事 (submit / switch / shift)。
+        列: t_ms (記録開始からの時刻), event, vsync (SteamVR の vsync 番号),
+            pose_age_ms (submit: 頭の位置を読んでから渡し終わるまで), gpu_wait_ms (submit: GPU 待ち),
+            since_submit_ms (switch: 渡してからずらしの基準が切り替わるまで),
+            ref_x_mm / ref_y_mm (その絵を作った目), eye_x_mm / eye_y_mm (shift: 予測した目), dx_mm / dy_mm (shift: ずらし量),
+            lead_ms (shift: 予測の先読み)。目の位置は seated の座標 (両目の真ん中)。
+  0.1.6: 上の DPAD1～JIT1 (調査用の段とキー、AC風の見た目) をまとめて master に入れた。十字キーのアイコンもミント版
+    (cross_pov_aa_mint.png) にして、ほかの HUD の色とそろえた。*_mint.png は make_mint_png.py (リポジトリの一番上。steam_vr_wheel の1つ上で実行) で作ったもの。
+    デバッグのキーと CSV の仕様は docs/デバッグ機能.md にもまとめてある。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -129,7 +152,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.5'                      # このプログラムの版
+APP_VERSION = '0.1.6'                      # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -167,7 +190,7 @@ HUD_TEXTURE_SCALE = None                   # [CONFIG] SteamVR に渡すテクス
                                            #          数値なら 1px(HUD_RENDER_SCALE=1.0 のとき) あたりの倍率 (1.0 = 以前の 1.0 と同じ)
 HUD_TEXTURE_OVERSAMPLE = 2.0               # [CONFIG] 自動のときの余裕。必要な画素の何倍にするか。ぼやけて見えるなら上げる (2.0～3.0)
 HUD_MIPMAP_MAX_LEVEL = 1                   # [CONFIG] 縮小用の絵を何段まで使うか。1 = 1/2 まで (くっきり) / 2 = 1/4 まで / 0 = 使わない (ガビガビ)
-HUD_OPACITY = 0.65                         # [CONFIG] HUD (線・文字・記号) の不透明度。SACC 風に少し透かす。0.8～1.0
+HUD_OPACITY = 0.85                         # [CONFIG] (AC風テスト。元は 0.65) HUD (線・文字・記号) の不透明度。SACC 風に少し透かす。0.8～1.0
                                            #          薄板 (HUD_PANEL_ALPHA) とデバッグ用の縦線は、この値では薄くならない
 HUD_SOFTNESS = 0.15                         # [CONFIG] 縮小したときのやわらかさ。0 = いちばんくっきり / 0.25 = 少しやわらか / 0.5 = やわらか
                                            #          (小さく見えるほど自動でなめらかになる。その上に足すぼかしの量)
@@ -182,9 +205,9 @@ HUD_THREADED = True                        # [CONFIG] True = HUD を専用の処
 HUD_RENDER_AFTER_VSYNC_SEC = 0.001         # [CONFIG] vsync の何秒後に描き始めるか (専用スレッドのとき)
 
 # --- 色 (下の通知の段でも使うので、先に定義しておく) -------------------------------------
-HUD_COLOR_GREEN = (0, 255, 42, 255)        # [CONFIG] 通常のHUDの緑
+HUD_COLOR_GREEN = (130, 255, 180, 255)      # [CONFIG] 通常のHUDの緑 (AC風テスト: ミント。元は (0, 255, 42, 255))
 HUD_COLOR_YELLOW = (221, 204, 52, 255)     # [CONFIG] 黄色 (Bmark.png と同じ色)
-HUD_BAR_COLOR_NORMAL = None                # [CONFIG] スロットルバーの通常色 (r, g, b)。None = throttlebar_pixel.png の色
+HUD_BAR_COLOR_NORMAL = (130, 255, 180)     # [CONFIG] (AC風テスト。元は None) スロットルバーの通常色 (r, g, b)。None = throttlebar_pixel.png の色
 HUD_BAR_COLOR_YELLOW = (206, 206, 39)      # [CONFIG] スロットルバーが黄色のときの色 (#CECE27)
 HUD_BAR_YELLOW_WHEN = ['sig:cece27', 'sig:throttle_over_limit']   # [CONFIG] バーを黄色にする条件 (信号の名前のリスト。どれか1つで黄色)
 
@@ -218,7 +241,7 @@ HUD_LOG_WRAP_MAX = 4                       # [CONFIG] 長い1回分の表示を�
 HUD_LOG_FONT = 'hornet_bold'               # [CONFIG] 英数字のフォント (HUD_FONT_FILES の名前)
 HUD_LOG_FONT_JP = 'jp'                     # [CONFIG] 日本語などのフォント (HUD_FONT_FILES の名前)
 HUD_LOG_JP_SCALE = 0.95                    # [CONFIG] 日本語の文字の大きさの倍率 (英数字と高さが合わなければ変える)
-HUD_LOG_COLOR = (0, 255, 42, 255)          # [CONFIG] 通常の文字の色
+HUD_LOG_COLOR = (130, 255, 180, 255)        # [CONFIG] 通常の文字の色 (AC風テスト。元は (0, 255, 42, 255))
 HUD_LOG_COLOR_RULES = [                    # [CONFIG] この文字を含む行はこの色 (上から順に最初に合ったもの)
     ('Error', (255, 90, 60, 255)),
     ('Warning', (221, 204, 52, 255)),
@@ -232,7 +255,7 @@ HUD_VERSION_ROWS_ABOVE = 5.0               # [CONFIG] (実機で 5 に決めた)
 HUD_VERSION_ALIGN = 'right'                # [CONFIG] 'right' = HUD の右端に右揃え (いちばん右まで出ている部品の右端) /
                                            #   'notice' = 通知の列の揃え (HUD_NOTICE_ALIGN) に合わせる
 HUD_VERSION_FONT_PX = 34                   # [CONFIG] 文字の大きさ [px] ('V0.1.1' だけなので大きめ)
-HUD_VERSION_COLOR = (0, 255, 42, 255)      # [CONFIG]
+HUD_VERSION_COLOR = (130, 255, 180, 255)    # [CONFIG] (AC風テスト。元は (0, 255, 42, 255))
 HUD_VERSION_PANEL = True                   # [CONFIG] 裏に薄板を敷く
 
 # --- 起動時の表示 (HUD の中央に大きくシステム名とバージョン。しばらくして消える) --------------------------
@@ -242,7 +265,7 @@ HUD_SPLASH_OFFSET = None                   # [CONFIG] 中心の位置 (基準点
                                            #   上下はバージョン表記の下～通知の1段目の上の空き = 他の部品と重ならない所。ログは隠れる)
 HUD_SPLASH_TITLE_PX = 84                   # [CONFIG] システム名の大きさ [px]
 HUD_SPLASH_SUB_PX = 34                     # [CONFIG] その下のバージョンの行の大きさ [px]
-HUD_SPLASH_COLOR = (0, 255, 42, 255)       # [CONFIG]
+HUD_SPLASH_COLOR = (130, 255, 180, 255)     # [CONFIG] (AC風テスト。元は (0, 255, 42, 255))
 HUD_SPLASH_OPACITY = 1.0                   # [CONFIG] 文字の不透明度 (HUD_OPACITY の代わり。見やすさ優先で 1.0)
 HUD_SPLASH_PANEL_ALPHA = 0.75              # [CONFIG] 裏の板の濃さ。後ろの HUD の部品や明るい景色を隠して読みやすくする。0 = 板なし
 HUD_SPLASH_HIDE_LOG = True                 # [CONFIG] 出している間はデバッグログを隠す (重なるため。ログの行は残っていて、消えた後に出る)
@@ -332,11 +355,72 @@ def hud_rows_font_test():
     ]
 
 
+# --- Q29-3 調査用: スティックと VirtualDPad の数値の段 (デバッグ版だけ) ---------------------
+# 'text_fn' は values['dbg'] (Joystick._dpad_debug_values が作る辞書) を読む。Hornet は < > | # [ ] と小文字が無いので使わない。
+DPAD_DEBUG_HUD = True                      # [CONFIG] 起動時に数値の段を出すか (P キーで出す / 隠す)
+DPAD_DEBUG_HUD_HZ = 20.0                   # [CONFIG] 段の数字を書き換える回数 [回/秒]。多いほど細かいが HUD の描き直しが増える
+DPAD_DEBUG_LOG = True                      # [CONFIG] VirtualDPad の方向が変わるたびに [DPAD] の1行をログ (コンソール + HUD) に出す
+_DPAD_DIR_NAMES = {5: 'N', 8: 'U', 9: 'UR', 6: 'R', 3: 'DR', 2: 'D', 1: 'DL', 4: 'L', 7: 'UL'}
+
+
+def _dbg_f(v, fmt='{:+.2f}'):
+    try:
+        return fmt.format(float(v))
+    except Exception:
+        return '--'
+
+
+def hud_text_dbg_ls(v):
+    """左スティックの生の値 (rAxis[0])。R = 中心からの距離。"""
+    d = v.get('dbg') or {}
+    return 'LS X {} Y {} R {}'.format(_dbg_f(d.get('lx')), _dbg_f(d.get('ly')), _dbg_f(d.get('lr'), '{:.2f}'))
+
+
+def hud_text_dbg_rs(v):
+    """右スティックの生の値 (rAxis[0]。VirtualDPad に入る値)。A = 角度 (右 0、上 +90、左 180、下 -90)。"""
+    d = v.get('dbg') or {}
+    return 'RS X {} Y {} R {} A {}'.format(_dbg_f(d.get('rx')), _dbg_f(d.get('ry')), _dbg_f(d.get('rr'), '{:.2f}'),
+                                          _dbg_f(d.get('ra'), '{:+04.0f}'))
+
+
+def hud_text_dbg_avg(v):
+    """VirtualDPad が判定に使う 3 回平均の距離と角度。E = いちばん近い区画の境目までの角度。"""
+    d = v.get('dbg') or {}
+    return 'AVG R {} A {} E {}'.format(_dbg_f(d.get('dist'), '{:.2f}'), _dbg_f(d.get('ang'), '{:+06.1f}'),
+                                       _dbg_f(d.get('edge'), '{:04.1f}'))
+
+
+def hud_text_dbg_dir(v):
+    """判定結果。TH = 今使っているしきい値 (中立なら入る 0.60、方向中なら出る 0.45)。POV / BTN = 出力の方式。"""
+    d = v.get('dbg') or {}
+    di = d.get('dir', 5)
+    return 'DIR {} {} TH {} {} {}'.format(di, _DPAD_DIR_NAMES.get(di, '-'), _dbg_f(d.get('th'), '{:.2f}'),
+                                          d.get('mode', '-'), d.get('out', '-'))
+
+
+def hud_text_dbg_chg(v):
+    """方向が変わった回数 (中立を含む) と、今の方向になってからの時間 [ms]。"""
+    d = v.get('dbg') or {}
+    return 'CHG {:04d} MS {:05d}'.format(int(d.get('chg', 0)) % 10000, min(99999, int(d.get('ms', 0))))
+
+
+def hud_rows_dpad_debug():
+    """数値の段 (左寄せ、幅は最大の文字列で固定)。'sig:dpad_debug' の間だけ出す。"""
+    on = ['sig:dpad_debug']
+    return [
+        {'id': 'dbg_ls', 'on': on, 'parts': [{'text_fn': hud_text_dbg_ls, 'reserve': 'LS X -0.00 Y -0.00 R 0.00', 'align': 'left'}]},
+        {'id': 'dbg_rs', 'on': on, 'parts': [{'text_fn': hud_text_dbg_rs, 'reserve': 'RS X -0.00 Y -0.00 R 0.00 A -180', 'align': 'left'}]},
+        {'id': 'dbg_avg', 'on': on, 'parts': [{'text_fn': hud_text_dbg_avg, 'reserve': 'AVG R 0.00 A -180.0 E 22.5', 'align': 'left'}]},
+        {'id': 'dbg_dir', 'on': on, 'parts': [{'text_fn': hud_text_dbg_dir, 'reserve': 'DIR 5 UR TH 0.00 POV 31500', 'align': 'left'}]},
+        {'id': 'dbg_chg', 'on': on, 'parts': [{'text_fn': hud_text_dbg_chg, 'reserve': 'CHG 0000 MS 00000', 'align': 'left'}]},
+    ]
+
+
 HUD_FONT_TEST = True                       # [CONFIG] フォント確認用の段を出す (確認が終わったら False)
 HUD_NOTICE_ROWS = [                        # [CONFIG] 上から並べる順番
     hud_row_bmark(),
     hud_row_cruise(),
-] + (hud_rows_font_test() if HUD_FONT_TEST else [])
+] + hud_rows_dpad_debug() + (hud_rows_font_test() if HUD_FONT_TEST else [])   # 数値の段をアイコンの段より上に (DPAD2)
 
 # --- 半透明の薄板 (HUD表示部分だけの裏に敷く。ゲーム画面は隠さない) -----------------------
 HUD_PANEL_ENABLED = True                   # [CONFIG] 薄板を付けるか
@@ -423,6 +507,12 @@ HUD_LATE_SHIFT_VSYNC_TARGET = True         # [CONFIG] ずらしの頭の位置�
                                            #   False = 絵と同じ「常に一定時間先」。実行中はコンソールの T キーで切り替え
 HUD_LATE_SHIFT_RUNNING_START_SEC = 0.003   # [CONFIG] SteamVR が vsync の何秒前に合成を始めるか (この時刻を過ぎたら、その次の画面を狙う)
 HUD_LATE_SHIFT_MAX_M = 0.05                # [CONFIG] ずらす量の上限 [m] (予測が飛んだときに HUD が大きく跳ばないため)
+# --- HUD 揺れ調査用 (JIT1、デバッグ版だけ) ---
+HUD_TEXTURE_FREEZE_HZ = 0.0                # [CONFIG] 0 = 通常。>0 = 'fakefar' の絵の描き直しをこの回数 [回/秒] までに絞る (ずらしはそのまま)。X キーで切り替え
+HUD_TEXTURE_FREEZE_STEPS = [0.0, 10.0, 5.0, 1.0]   # [CONFIG] X キーで順に切り替える値
+HUD_TEXTURE_FREEZE_SHIFT_MAX_M = 0.30      # [CONFIG] 絞っている間のずらす量の上限 [m] (絵が古いぶん、ずらす量が大きくなるため)
+HUD_JITTER_CSV_DIR = None                  # [CONFIG] 調査用 CSV を置くフォルダ。None = この .py と同じフォルダ。J キーで記録の開始 / 停止
+HUD_JITTER_CSV_FLUSH_SEC = 0.5             # [CONFIG] CSV をファイルに書き出す間隔 [秒] (毎回書くと HUD の描画が遅れるため、ためてまとめて書く)
 DEBUG_KEYMAP = [                           # [CONFIG] コンソールのキー → デバッグコマンド (Joystick.debug_command の名前)。
     ('h', 'hud_recenter'),                 #   大文字・小文字は区別しない。コマンドの一覧は Joystick.DEBUG_COMMANDS
     ('f', 'hud_cycle_mode'),
@@ -435,6 +525,11 @@ DEBUG_KEYMAP = [                           # [CONFIG] コンソールのキー �
     ('\\', 'hud_predict_reset'),
     ('c', 'pivot_calibration'),
     ('l', 'hud_log_cycle'),
+    ('p', 'dpad_debug'),                   # Q29-3 調査用 (デバッグ版だけ)
+    ('o', 'dpad_log'),                     # Q29-3 調査用: [DPAD] の1行ログを出す / 止める
+    ('k', 'hud_late_shift_toggle'),        # HUD 揺れ調査用 (JIT1)
+    ('x', 'hud_texture_freeze'),           # HUD 揺れ調査用 (JIT1)
+    ('j', 'hud_jitter_csv'),               # HUD 揺れ調査用 (JIT1)
 ]
 HUD_GFX_BACKEND = 'opengl'                 # [CONFIG] 描画の裏方。今は 'opengl' だけ (D3D11 は予定。HudGfx を継承して足す)
 HUD_THREAD_HIGH_PRIORITY = True            # [CONFIG] HUD の描画スレッドの優先度を上げる (Windows)。ワールド読み込みなど CPU が重いときの遅れ・跳びを減らす。
@@ -469,15 +564,15 @@ HUD_STEREO_SWAP = False                    # [CONFIG] 奥ではなく手前に�
 HUD_STEREO_TEXEL_ASPECT = None             # [CONFIG] 立体視にしたとき HUD の縦横比がおかしい (縦につぶれる/伸びる) なら 2.0 か 0.5 を試す
 
 # --- にじみ (発光・ぼかし) ―― くっきりしすぎを和らげ、光って見せる ----------------------------
-HUD_GLOW_RADIUS_PX = 3.0                   # [CONFIG] 周りににじむ光の広がり [px]。0 = なし
-HUD_GLOW_STRENGTH = 0.5                    # [CONFIG] にじむ光の濃さ 0.0～1.0
-HUD_SOFTEN_PX = 0.6                        # [CONFIG] 線そのもののぼかし [px]。0 = くっきり (0.5～1.0 がおすすめ)
+HUD_GLOW_RADIUS_PX = 5.0                   # [CONFIG] (AC風テスト。元は 3.0) 周りににじむ光の広がり [px]。0 = なし
+HUD_GLOW_STRENGTH = 0.35                   # [CONFIG] (AC風テスト。元は 0.5) にじむ光の濃さ 0.0～1.0
+HUD_SOFTEN_PX = 0.3                        # [CONFIG] (AC風テスト。元は 0.6) 線そのもののぼかし [px]。0 = くっきり (0.5～1.0 がおすすめ)
 
 # --- 操作インジゲータの細かい設定 ----------------------------------------------------
-HUD_FRAME_FILES = ('input_hud.png', 'throttle_box.png')   # [CONFIG] ゲージ+ボックスの一体画像 (先に見つかったもの)
-HUD_YAWLINE_FILE = 'yawline.png'           # [CONFIG]
-HUD_CROSS_FILE = 'cross.png'               # [CONFIG]
-HUD_POV_FILE = 'cross_pov_aa.png'          # [CONFIG] 十字キーモードのアイコン
+HUD_FRAME_FILES = ('input_hud_mint.png', 'input_hud.png', 'throttle_box.png')   # [CONFIG] ゲージ+ボックスの一体画像 (先に見つかったもの)
+HUD_YAWLINE_FILE = 'yawline_mint.png'      # [CONFIG] (AC風テスト。元は 'yawline.png'。make_mint_png.py で作る)
+HUD_CROSS_FILE = 'cross_mint.png'          # [CONFIG] (AC風テスト。元は 'cross.png')
+HUD_POV_FILE = 'cross_pov_aa_mint.png'     # [CONFIG] 十字キーモードのアイコン (AC風。ほかの HUD の色に合わせたミント版。元は 'cross_pov_aa.png')
 HUD_BAR_MARGIN_TOP = 4                     # [CONFIG] バーと枠線の内側とのすき間 (上) [px]
 HUD_BAR_MARGIN_BOTTOM = 4                  # [CONFIG] 同 (下) [px]
 HUD_BAR_MARGIN_X = 4                       # [CONFIG] 同 (左右) [px]
@@ -549,7 +644,7 @@ HUD_BUTTON_GLYPHS = {                      # [CONFIG]
 #      'color': (206, 206, 39, 255), 'btn_scale': 1.2},
 # ]
 HUD_TEXT_ITEMS = []                        # [CONFIG]
-HUD_TEXT_COLOR = (0, 255, 42, 255)         # [CONFIG]
+HUD_TEXT_COLOR = (130, 255, 180, 255)       # [CONFIG] (AC風テスト。元は (0, 255, 42, 255))
 
 
 def _text_size(font, text):
@@ -1756,6 +1851,129 @@ def hud_toggle_shift_vsync_target():
     HUD_LATE_SHIFT_VSYNC_TARGET = not HUD_LATE_SHIFT_VSYNC_TARGET
     print("[HUD] ずらしの予測: {} (HUD_LATE_SHIFT_VSYNC_TARGET = {})".format(
         "次に合成される画面が光る時刻に合わせる" if HUD_LATE_SHIFT_VSYNC_TARGET else "常に一定時間先", HUD_LATE_SHIFT_VSYNC_TARGET))
+
+
+def hud_toggle_dpad_log():
+    """DPAD_DEBUG_LOG ([DPAD] の1行ログ) を入/切 (コンソールの O キー。JIT1)。VirtualDPad はこの変数を毎回見る。"""
+    global DPAD_DEBUG_LOG
+    DPAD_DEBUG_LOG = not DPAD_DEBUG_LOG
+    print("[DPAD] 1行ログ: {}".format("出す" if DPAD_DEBUG_LOG else "止める"))
+
+
+def hud_toggle_late_shift():
+    """HUD_LATE_SHIFT を入/切 (コンソールの K キー。JIT1)。切ると次の描画で遠いオーバーレイは元の位置に戻る。"""
+    global HUD_LATE_SHIFT
+    HUD_LATE_SHIFT = not HUD_LATE_SHIFT
+    print("[HUD] ずらし (HUD_LATE_SHIFT): {}".format("入" if HUD_LATE_SHIFT else "切"))
+
+
+def hud_cycle_texture_freeze():
+    """HUD_TEXTURE_FREEZE_HZ を HUD_TEXTURE_FREEZE_STEPS の順に変える (コンソールの X キー。JIT1)。"""
+    global HUD_TEXTURE_FREEZE_HZ
+    steps = [float(v) for v in HUD_TEXTURE_FREEZE_STEPS] or [0.0]
+    cur = float(HUD_TEXTURE_FREEZE_HZ or 0.0)
+    i = steps.index(cur) if cur in steps else -1
+    HUD_TEXTURE_FREEZE_HZ = steps[(i + 1) % len(steps)]
+    if HUD_TEXTURE_FREEZE_HZ > 0.0:
+        print("[HUD] 絵の描き直しを {:g} 回/秒に絞る (ずらしはそのまま。'fakefar' + ずらし入 のときだけ効く)".format(HUD_TEXTURE_FREEZE_HZ))
+    else:
+        print("[HUD] 絵の描き直し: 通常")
+
+
+class _HudJitterCsv(object):
+    """
+    HUD 揺れ調査用の CSV (JIT1)。HUD の描画スレッドから row() で1行ずつためて、HUD_JITTER_CSV_FLUSH_SEC ごとにまとめて書く。
+    start/stop はキーの処理 (Joystick.update のスレッド) から呼ばれるので、ためる所は lock で守る。
+    """
+    COLUMNS = ['t_ms', 'event', 'vsync', 'pose_age_ms', 'gpu_wait_ms', 'since_submit_ms',
+               'ref_x_mm', 'ref_y_mm', 'eye_x_mm', 'eye_y_mm', 'dx_mm', 'dy_mm', 'lead_ms']
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._f = None
+        self._buf = []
+        self._t0 = 0.0
+        self._t_flush = 0.0
+        self.path = None
+
+    @property
+    def on(self):
+        return self._f is not None
+
+    def start(self):
+        if self._f is not None:
+            return
+        try:
+            d = HUD_JITTER_CSV_DIR or os.path.dirname(os.path.abspath(__file__))
+            self.path = os.path.join(d, time.strftime('hud_jitter_%Y%m%d_%H%M%S.csv'))
+            f = open(self.path, 'w')
+            f.write(','.join(self.COLUMNS) + '\n')
+            with self._lock:
+                self._buf = []
+                self._t0 = time.time()
+                self._t_flush = self._t0
+                self._f = f
+            print("[HUD] 調査用 CSV の記録を始めました: {}".format(self.path))
+        except Exception as e:
+            self._f = None
+            print("[HUD Error] 調査用 CSV を開けません: {}: {}".format(type(e).__name__, e))
+
+    def stop(self):
+        with self._lock:
+            f, self._f = self._f, None
+            buf, self._buf = self._buf, []
+        if f is None:
+            return
+        try:
+            f.write(''.join(buf))
+            f.close()
+            print("[HUD] 調査用 CSV の記録を止めました: {}".format(self.path))
+        except Exception as e:
+            print("[HUD Error] 調査用 CSV を書けません: {}: {}".format(type(e).__name__, e))
+
+    def row(self, event, **kw):
+        """1行ためる。kw の名前は COLUMNS の名前 (無いものは空欄)。数値は小数3桁。"""
+        if self._f is None:
+            return
+        now = time.time()
+        kw['t_ms'] = (now - self._t0) * 1000.0
+        kw['event'] = event
+        if 'vsync' not in kw:
+            kw['vsync'] = _hud_vsync_count()
+        cells = []
+        for c in self.COLUMNS:
+            v = kw.get(c)
+            if v is None:
+                cells.append('')
+            elif isinstance(v, float):
+                cells.append('{:.3f}'.format(v))
+            else:
+                cells.append(str(v))
+        line = ','.join(cells) + '\n'
+        with self._lock:
+            if self._f is None:
+                return
+            self._buf.append(line)
+            if now - self._t_flush < float(HUD_JITTER_CSV_FLUSH_SEC):
+                return
+            self._t_flush = now
+            buf, self._buf = self._buf, []
+            try:
+                self._f.write(''.join(buf))
+            except Exception as e:
+                print("[HUD Error] 調査用 CSV を書けません: {}: {}".format(type(e).__name__, e))
+
+
+HUD_JITTER_CSV = _HudJitterCsv()
+atexit.register(HUD_JITTER_CSV.stop)
+
+
+def hud_toggle_jitter_csv():
+    """調査用 CSV の記録を始める / 止める (コンソールの J キー。JIT1)。"""
+    if HUD_JITTER_CSV.on:
+        HUD_JITTER_CSV.stop()
+    else:
+        HUD_JITTER_CSV.start()
 
 
 def _hud_display_timing():
@@ -3646,6 +3864,11 @@ class HudPlateOverlay(object):
         self._t_finish = time.time() - t0
         err = self._gfx.submit(self._fn_texture, self._h_main, self._tex_struct)
         self._t_submitted = time.time()
+        if HUD_JITTER_CSV.on:
+            ref = self._shift_ref_next
+            HUD_JITTER_CSV.row('submit', gpu_wait_ms=self._t_finish * 1000.0,
+                               pose_age_ms=(self._t_submitted - self._t_pose) * 1000.0 if self._t_pose else None,
+                               ref_x_mm=ref[0] * 1000.0 if ref else None, ref_y_mm=ref[1] * 1000.0 if ref else None)
         if self._late_shift_on() and self._shift_ref_next is not None:
             self._shift_after_submit(self._shift_ref_next)
         self._clear_gl_errors('HUD')
@@ -3695,6 +3918,9 @@ class HudPlateOverlay(object):
             self._gfx.fence_delete(pend[0])
             pend[0] = None
         self._shift_ref = pend[1]
+        if HUD_JITTER_CSV.on:
+            HUD_JITTER_CSV.row('switch', since_submit_ms=(time.time() - pend[2]) * 1000.0,
+                               ref_x_mm=pend[1][0] * 1000.0, ref_y_mm=pend[1][1] * 1000.0)
         if record and self._stats_sec > 0:
             st = self._st
             st['cw_n'] = st.get('cw_n', 0) + 1
@@ -3769,6 +3995,8 @@ class HudPlateOverlay(object):
             return
         r = 1.0 - (e[2] - fc[2]) / (e[2] - z_virtual)
         lim = float(HUD_LATE_SHIFT_MAX_M)
+        if float(HUD_TEXTURE_FREEZE_HZ or 0.0) > 0.0:
+            lim = max(lim, float(HUD_TEXTURE_FREEZE_SHIFT_MAX_M))   # 絵を絞っている間は絵が古いので、大きくずらす
         dx = _hud_clamp((e[0] - ref[0]) * r, -lim, lim)
         dy = _hud_clamp((e[1] - ref[1]) * r, -lim, lim)
         m = openvr.HmdMatrix34_t()
@@ -3776,6 +4004,9 @@ class HudPlateOverlay(object):
         m.m[0][3], m.m[1][3], m.m[2][3] = fc[0] + dx, fc[1] + dy, fc[2]
         self._fn_transform(self._h_far, openvr.TrackingUniverseSeated, openvr.byref(m))
         self._shift_now = (dx, dy)
+        if HUD_JITTER_CSV.on:
+            HUD_JITTER_CSV.row('shift', eye_x_mm=e[0] * 1000.0, eye_y_mm=e[1] * 1000.0, ref_x_mm=ref[0] * 1000.0,
+                               ref_y_mm=ref[1] * 1000.0, dx_mm=dx * 1000.0, dy_mm=dy * 1000.0, lead_ms=lead * 1000.0)
         now = time.time()
         gap = now - self._shift_t if self._shift_t else 0.0
         self._shift_t = now
@@ -4185,7 +4416,17 @@ class HudPlateOverlay(object):
                     self._submit()
             elif self._hybrid_on():
                 key = self._hybrid_maps()
-                if content_changed or force or key != self._map_key:
+                redraw = content_changed or force or key != self._map_key or getattr(self, '_freeze_pending', False)
+                fz = float(HUD_TEXTURE_FREEZE_HZ or 0.0)
+                if redraw and fz > 0.0 and not force and self._late_shift_on():
+                    # JIT1: 絵の描き直しを fz 回/秒に絞る (ずらしは _late_shift_update がそのまま続ける)。
+                    # 絞って描かなかった変更 (ログの行など) は _freeze_pending で覚えておき、次に描ける時に描く。
+                    if now - getattr(self, '_t_freeze_draw', 0.0) < 1.0 / fz:
+                        self._freeze_pending = True
+                        redraw = False
+                if redraw:
+                    self._freeze_pending = False
+                    self._t_freeze_draw = now
                     self._draw_output(key)
                     self._map_key = key
                     self._submit()
@@ -4628,6 +4869,13 @@ class VirtualDPad:
 
         self.pos_history = deque(maxlen=3)
 
+        # Q29-3 調査用: 判定の中身 (動きは変えない。読むだけ)
+        self.dbg_dist = 0.0          # 3 回平均の距離
+        self.dbg_angle = 0.0         # 3 回平均の角度 [度] (atan2(y, x))
+        self.dbg_threshold = self.enter_deadzone
+        self.dbg_changes = 0         # 方向が変わった回数 (中立も1つの方向として数える)
+        self.dbg_change_time = time.time()
+
     def _get_sector(self, angle_deg):
         if -22.5 <= angle_deg < 22.5:
             return 6
@@ -4653,6 +4901,9 @@ class VirtualDPad:
         avg_ry = sum(p[1] for p in self.pos_history) / len(self.pos_history)
 
         distance = math.sqrt(avg_rx * avg_rx + avg_ry * avg_ry)
+        self.dbg_dist = distance
+        self.dbg_angle = math.degrees(math.atan2(avg_ry, avg_rx))
+        self.dbg_threshold = self.enter_deadzone if self.current_dir == 5 else self.exit_deadzone
 
         if self.current_dir == 5:
             target_dir = 5 if distance < self.enter_deadzone else self._get_sector(math.degrees(math.atan2(avg_ry, avg_rx)))
@@ -4663,6 +4914,14 @@ class VirtualDPad:
             target_dir = 5
 
         self.is_new_press = (target_dir != 5) and (self.current_dir == 5)
+        if target_dir != self.current_dir:
+            now = time.time()
+            self.dbg_changes += 1
+            if DPAD_DEBUG_LOG:
+                print("[DPAD] {} -> {}  R {:.2f} A {:+.1f} TH {:.2f} {}ms".format(
+                    _DPAD_DIR_NAMES.get(self.current_dir, '?'), _DPAD_DIR_NAMES.get(target_dir, '?'),
+                    distance, self.dbg_angle, self.dbg_threshold, int((now - self.dbg_change_time) * 1000)))
+            self.dbg_change_time = now
         self.last_dir = self.current_dir
         self.current_dir = target_dir
         return self.current_dir
@@ -4719,6 +4978,10 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
 
         self.dpad = VirtualDPad()
         self.pov_buttons = [19, 20, 21, 22]
+        self.dpad_debug_hud = bool(DPAD_DEBUG_HUD)   # Q29-3 調査用
+        self._dpad_dbg_out = '-'                     # 最後に vJoy に出したもの (POV の角度 / ボタン番号)
+        self._dpad_dbg_vals = {}
+        self._dpad_dbg_time = 0.0
 
         self.enable_oneshot_mode = False
 
@@ -4891,6 +5154,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         direction = self.dpad.update(rx, ry)
 
         if direction == 5:
+            self._dpad_dbg_out = '-'
             for b_id in self.pov_buttons:
                 self.device.set_button(b_id, False)
             self._set_pov(-1, 1)
@@ -4905,6 +5169,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 2: 18000, 1: 22500, 4: 27000, 7: 31500,
             }
             angle = pov_angle_map.get(direction, -1)
+            self._dpad_dbg_out = str(angle)
             self._set_pov(angle, 1)
         else:
             self._set_pov(-1, 1)
@@ -4916,6 +5181,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 4: [btn_left],
             }
             active_buttons = button_map.get(direction, [])
+            self._dpad_dbg_out = ' '.join(str(b) for b in active_buttons) if active_buttons else 'NONE'
             for b_id in self.pov_buttons:
                 self.device.set_button(b_id, b_id in active_buttons)
 
@@ -4968,6 +5234,11 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ('hud_log_toggle', "HUD のデバッグログを隠す / 出す (出すときは隠す前の大きさ)"),
         ('hud_log_clear', "HUD のデバッグログを消す (コンソールの表示はそのまま)"),
         ('version', "システム名とバージョンを表示する (コンソール + HUD の中央に大きく)"),
+        ('dpad_debug', "Q29-3 調査用: スティックと VirtualDPad の数値の段を出す / 隠す"),
+        ('dpad_log', "Q29-3 調査用: VirtualDPad の方向が変わるたびの [DPAD] の1行ログを出す / 止める"),
+        ('hud_late_shift_toggle', "HUD 揺れ調査用: 'fakefar' のずらし (HUD_LATE_SHIFT) を入 / 切"),
+        ('hud_texture_freeze', "HUD 揺れ調査用: 'fakefar' の絵の描き直しを 通常 → 10 → 5 → 1 回/秒 に絞る (ずらしはそのまま)"),
+        ('hud_jitter_csv', "HUD 揺れ調査用: 1枚ごとの時刻とずらし量の CSV の記録を始める / 止める"),
     ]
 
     def debug_command(self, name):
@@ -5015,6 +5286,17 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             print("[HUD] デバッグログ: {}".format("出す" if on else "隠す"))
         elif name == 'hud_log_clear':
             HUD_LOG.clear()
+        elif name == 'dpad_debug':
+            self.dpad_debug_hud = not self.dpad_debug_hud
+            print("[DPAD] 数値の段: {}".format("出す" if self.dpad_debug_hud else "隠す"))
+        elif name == 'dpad_log':
+            hud_toggle_dpad_log()
+        elif name == 'hud_late_shift_toggle':
+            hud_toggle_late_shift()
+        elif name == 'hud_texture_freeze':
+            hud_cycle_texture_freeze()
+        elif name == 'hud_jitter_csv':
+            hud_toggle_jitter_csv()
         elif name == 'version':
             print(app_version_text())
             if hud is not None and hasattr(hud, 'show_splash'):
@@ -5147,6 +5429,32 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         except Exception:
             pass
 
+    def _dpad_debug_values(self, left_ctr, right_ctr):
+        """Q29-3 調査用: 数値の段に渡す辞書。DPAD_DEBUG_HUD_HZ の回数だけ作り直す (それ以外は前の辞書 = 描き直さない)。"""
+        now = time.time()
+        if self._dpad_dbg_vals and now - self._dpad_dbg_time < 1.0 / max(1.0, float(DPAD_DEBUG_HUD_HZ)):
+            return self._dpad_dbg_vals
+        self._dpad_dbg_time = now
+        try:
+            lx = float(getattr(left_ctr, 'trackpadX', 0.0))
+            ly = float(getattr(left_ctr, 'trackpadY', 0.0))
+            rx = float(getattr(right_ctr, 'trackpadX', 0.0))
+            ry = float(getattr(right_ctr, 'trackpadY', 0.0))
+            dp = self.dpad
+            ang = dp.dbg_angle
+            edge = abs(((ang - 22.5) % 45.0) - 22.5)    # 8 区画の境目 (22.5 + 45n) までの角度
+            edge = 22.5 - edge
+            self._dpad_dbg_vals = {
+                'lx': lx, 'ly': ly, 'lr': math.sqrt(lx * lx + ly * ly),
+                'rx': rx, 'ry': ry, 'rr': math.sqrt(rx * rx + ry * ry), 'ra': math.degrees(math.atan2(ry, rx)),
+                'dist': dp.dbg_dist, 'ang': ang, 'edge': edge, 'th': dp.dbg_threshold,
+                'dir': dp.current_dir, 'mode': 'POV' if self.is_pov_mode else 'BTN', 'out': self._dpad_dbg_out,
+                'chg': dp.dbg_changes, 'ms': (now - dp.dbg_change_time) * 1000.0,
+            }
+        except Exception as e:
+            print("[DPAD] Warning: 数値を作れませんでした: {}".format(e))
+        return self._dpad_dbg_vals
+
     def update(self, left_ctr, right_ctr):
         super().update(left_ctr, right_ctr)
 
@@ -5205,9 +5513,11 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 signals={'sig:throttle_over_limit': is_over_limit,
                          'sig:stick_grab': self._joystick_grabbed,
                          'sig:throttle_grab': self.throttle_z.throttle_grabbed,
-                         'sig:cruise': bool(CRUISE_MODE_ENABLED)},
+                         'sig:cruise': bool(CRUISE_MODE_ENABLED),
+                         'sig:dpad_debug': self.dpad_debug_hud},
                 buttons=self._vbtn_state,
                 values={'throttle': self.throttle_z.x,
                         'cruise_power': CRUISE_MODE_Power if CRUISE_MODE_Power is not None else self.throttle_z.x,
-                        'cruise_center': self.cruise_center}
+                        'cruise_center': self.cruise_center,
+                        'dbg': self._dpad_debug_values(left_ctr, right_ctr) if self.dpad_debug_hud else None}
             )
