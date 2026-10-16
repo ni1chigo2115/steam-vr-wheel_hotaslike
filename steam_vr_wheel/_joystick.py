@@ -38,7 +38,7 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
   0.1.5-DPAD3-AC-JIT1 (HUD 揺れ調査用): 実機でその場で切り替えて試すキーを足した。
     O = [DPAD] の1行ログを出す / 止める (DPAD_DEBUG_LOG)。P (数値の段) と合わせて切ると、スティックのログが消える。
     K = HUD_LATE_SHIFT (ずらし) を入 / 切。
-    X = 'fakefar' の絵の描き直しを 通常 → 10回/秒 → 5回/秒 → 1回/秒 → 通常 に絞る (HUD_TEXTURE_FREEZE_HZ)。
+    X = 'fakefar' の絵の描き直しを 通常 → 40 → 20 → 10 → 5 → 1回/秒 → 通常 に絞る (HUD_TEXTURE_FREEZE_HZ)。
         ずらしは今まで通り約 650回/秒。絞って高負荷でも揺れが消えれば「絵とずらしの切り替えのずれ」が原因と分かる。
         絞っている間は前後の動き (拡大縮小) と回転が遅れて見えるが、それは正常 (調べたいのは上下左右の小さな跳び)。
     J = 調査用 CSV (HUD_JITTER_CSV_*) の記録を始める / 止める。1行 = 1つの出来事 (submit / switch / shift)。
@@ -51,6 +51,7 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     (cross_pov_aa_mint.png) にして、ほかの HUD の色とそろえた。*_mint.png は make_mint_png.py (リポジトリの一番上。steam_vr_wheel の1つ上で実行) で作ったもの。
     デバッグのキーと CSV の仕様は docs/デバッグ機能.md にもまとめてある。
   0.1.7: 通知の段に現在時刻 (時:分:秒、PC の時計) の段を足した (HUD_CLOCK_*)。動画や CSV と見比べるため。
+  0.1.8: X キーの段階に 40 / 20 回/秒を足した (HUD_TEXTURE_FREEZE_STEPS)。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -153,7 +154,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.7'                      # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.8'                      # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -526,7 +527,7 @@ HUD_LATE_SHIFT_RUNNING_START_SEC = 0.003   # [CONFIG] SteamVR が vsync の何�
 HUD_LATE_SHIFT_MAX_M = 0.05                # [CONFIG] ずらす量の上限 [m] (予測が飛んだときに HUD が大きく跳ばないため)
 # --- HUD 揺れ調査用 (JIT1、デバッグ版だけ) ---
 HUD_TEXTURE_FREEZE_HZ = 0.0                # [CONFIG] 0 = 通常。>0 = 'fakefar' の絵の描き直しをこの回数 [回/秒] までに絞る (ずらしはそのまま)。X キーで切り替え
-HUD_TEXTURE_FREEZE_STEPS = [0.0, 10.0, 5.0, 1.0]   # [CONFIG] X キーで順に切り替える値
+HUD_TEXTURE_FREEZE_STEPS = [0.0, 40.0, 20.0, 10.0, 5.0, 1.0]   # [CONFIG] X キーで順に切り替える値
 HUD_TEXTURE_FREEZE_SHIFT_MAX_M = 0.30      # [CONFIG] 絞っている間のずらす量の上限 [m] (絵が古いぶん、ずらす量が大きくなるため)
 HUD_JITTER_CSV_DIR = None                  # [CONFIG] 調査用 CSV を置くフォルダ。None = この .py と同じフォルダ。J キーで記録の開始 / 停止
 HUD_JITTER_CSV_FLUSH_SEC = 0.5             # [CONFIG] CSV をファイルに書き出す間隔 [秒] (毎回書くと HUD の描画が遅れるため、ためてまとめて書く)
@@ -5254,7 +5255,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ('dpad_debug', "Q29-3 調査用: スティックと VirtualDPad の数値の段を出す / 隠す"),
         ('dpad_log', "Q29-3 調査用: VirtualDPad の方向が変わるたびの [DPAD] の1行ログを出す / 止める"),
         ('hud_late_shift_toggle', "HUD 揺れ調査用: 'fakefar' のずらし (HUD_LATE_SHIFT) を入 / 切"),
-        ('hud_texture_freeze', "HUD 揺れ調査用: 'fakefar' の絵の描き直しを 通常 → 10 → 5 → 1 回/秒 に絞る (ずらしはそのまま)"),
+        ('hud_texture_freeze', "HUD 揺れ調査用: 'fakefar' の絵の描き直しを 通常 → 40 → 20 → 10 → 5 → 1 回/秒 に絞る (ずらしはそのまま)"),
         ('hud_jitter_csv', "HUD 揺れ調査用: 1枚ごとの時刻とずらし量の CSV の記録を始める / 止める"),
     ]
 
