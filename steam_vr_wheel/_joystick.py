@@ -25,6 +25,7 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     - [ / ] : 頭の位置の予測に足す時間を -2ms / +2ms (HUD_DEPTH_PREDICT_EXTRA_SEC)。\\ で 0 に戻す
     - P / O : (調査用) スティックの数値の段を出す / 隠す、[DPAD] の1行ログを出す / 止める
     - G : (検証用) 頭の位置の計算を別スレッドで回す / 描く側で読む (HUD_POSE_THREAD)
+    - N : (検証用) 別スレッドの計算間隔を 1 → 0.5 → 0.25 ms (HUD_POSE_THREAD_INTERVAL_SEC)
     - K / X / J : (HUD 揺れ調査用 JIT1) ずらしの入/切、絵の描き直しを絞る、調査用 CSV の記録 (下の版の説明を参照)
     - L : HUD のデバッグログを 普通 → 大きく → 隠す (コマンド 'hud_log_cycle')。ほかに 'hud_log_toggle' / 'hud_log_clear' / 'version' (キーなし)
   システム名とバージョン: APP_NAME ('SteamVR Virtual Cockpit') / APP_VERSION / APP_BASE_VERSION。
@@ -56,6 +57,9 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
   0.1.9 (検証用): G キー = 頭の位置の計算を別スレッドに分ける (HUD_POSE_THREAD)。入にすると 'hud_pose' スレッドが
     約 1ms ごとに「絵用の予測」と「ずらし用の予測」を計算して変数に入れ、描くときとずらすときはその最新の値を代入するだけになる。
     切 (既定) は今まで通り、描く直前とずらす直前にそれぞれ自分で読む。
+  0.1.10 (検証用): N キー = 別スレッドの計算間隔を 1ms → 0.5ms → 0.25ms → 1ms (HUD_POSE_THREAD_INTERVAL_STEPS)。
+    1ms 未満は Windows の sleep では待てないので、time.sleep(0) で譲りながら時計を見て待つ (CPU を1コアほぼ使い切る)。
+    S キーの統計を出している間は、別スレッドの実際の計算回数を5秒ごとに表示する。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -158,7 +162,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.9'                      # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.10'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -535,7 +539,8 @@ HUD_TEXTURE_FREEZE_STEPS = [0.0, 240.0, 120.0, 80.0, 60.0, 40.0, 20.0, 10.0, 5.0
 HUD_TEXTURE_FREEZE_SHIFT_MAX_M = 0.30      # [CONFIG] 絞っている間のずらす量の上限 [m] (絵が古いぶん、ずらす量が大きくなるため)
 HUD_POSE_THREAD = False                    # [CONFIG] (検証用) True = 頭の位置の計算を別スレッド ('hud_pose') で約 1ms ごとに回し、
                                            #   描くとき・ずらすときは最新の値を代入するだけにする。G キーで切り替え
-HUD_POSE_THREAD_INTERVAL_SEC = 0.001       # [CONFIG] 別スレッドで計算する間隔 [秒]
+HUD_POSE_THREAD_INTERVAL_SEC = 0.001       # [CONFIG] 別スレッドで計算する間隔 [秒]。1ms 未満は CPU を1コアほぼ使う (待ち方が空回りになる)
+HUD_POSE_THREAD_INTERVAL_STEPS = [0.001, 0.0005, 0.00025]   # [CONFIG] N キーで順に切り替える間隔 [秒]
 HUD_POSE_THREAD_MAX_AGE_SEC = 0.02         # [CONFIG] これより古い計算結果は使わず、その場で読む (別スレッドが止まったときの保険)
 HUD_JITTER_CSV_DIR = None                  # [CONFIG] 調査用 CSV を置くフォルダ。None = この .py と同じフォルダ。J キーで記録の開始 / 停止
 HUD_JITTER_CSV_FLUSH_SEC = 0.5             # [CONFIG] CSV をファイルに書き出す間隔 [秒] (毎回書くと HUD の描画が遅れるため、ためてまとめて書く)
@@ -557,6 +562,7 @@ DEBUG_KEYMAP = [                           # [CONFIG] コンソールのキー �
     ('x', 'hud_texture_freeze'),           # HUD 揺れ調査用 (JIT1)
     ('j', 'hud_jitter_csv'),               # HUD 揺れ調査用 (JIT1)
     ('g', 'hud_pose_thread'),              # 検証用 (0.1.9)
+    ('n', 'hud_pose_interval'),            # 検証用 (0.1.10)
 ]
 HUD_GFX_BACKEND = 'opengl'                 # [CONFIG] 描画の裏方。今は 'opengl' だけ (D3D11 は予定。HudGfx を継承して足す)
 HUD_THREAD_HIGH_PRIORITY = True            # [CONFIG] HUD の描画スレッドの優先度を上げる (Windows)。ワールド読み込みなど CPU が重いときの遅れ・跳びを減らす。
@@ -1892,6 +1898,19 @@ def hud_toggle_pose_thread():
     global HUD_POSE_THREAD
     HUD_POSE_THREAD = not HUD_POSE_THREAD
     print("[HUD] 頭の位置の計算: {}".format("別スレッドで回し、描くときは代入だけ" if HUD_POSE_THREAD else "描く直前・ずらす直前にその場で読む (通常)"))
+
+
+def hud_cycle_pose_interval():
+    """HUD_POSE_THREAD_INTERVAL_SEC を HUD_POSE_THREAD_INTERVAL_STEPS の順に変える (コンソールの N キー。0.1.10)。"""
+    global HUD_POSE_THREAD_INTERVAL_SEC
+    steps = [float(v) for v in HUD_POSE_THREAD_INTERVAL_STEPS] or [0.001]
+    cur = float(HUD_POSE_THREAD_INTERVAL_SEC)
+    i = steps.index(cur) if cur in steps else -1
+    HUD_POSE_THREAD_INTERVAL_SEC = steps[(i + 1) % len(steps)]
+    print("[HUD] 頭の位置の別スレッドの間隔: {:g}ms{}{}".format(
+        HUD_POSE_THREAD_INTERVAL_SEC * 1000.0,
+        " (1ms 未満は CPU を1コアほぼ使います。操縦が重くなったら N で戻す)" if HUD_POSE_THREAD_INTERVAL_SEC < 0.001 else "",
+        "" if HUD_POSE_THREAD else "。G キーで別スレッドを入れたときだけ効きます"))
 
 
 def hud_toggle_late_shift():
@@ -4361,6 +4380,7 @@ class HudPlateOverlay(object):
         if HUD_THREAD_HIGH_PRIORITY:
             _hud_raise_thread_priority()
         err = 0
+        n_calc, t_rate = 0, time.time()
         while not self._stop.is_set():
             if not HUD_POSE_THREAD:
                 self._pose_latest = None
@@ -4376,11 +4396,26 @@ class HudPlateOverlay(object):
                 p_shift = _read_head_pose(lead)
                 if p_tex is not None and p_shift is not None:
                     self._pose_latest = (time.time(), p_tex, p_shift, lead)
+                    n_calc += 1
             except Exception as e:
                 err += 1
                 if err <= 3:
                     print("[HUD Error] 頭の位置の別スレッド: {}: {}".format(type(e).__name__, e))
-            time.sleep(max(0.0005, float(HUD_POSE_THREAD_INTERVAL_SEC)))
+            now = time.time()
+            if now - t_rate >= 5.0:
+                if self._stats_sec > 0:
+                    print("[HUD 統計] 頭の位置の別スレッド: {:.0f}回/秒 (間隔の設定 {:g}ms)".format(
+                        n_calc / (now - t_rate), float(HUD_POSE_THREAD_INTERVAL_SEC) * 1000.0))
+                n_calc, t_rate = 0, now
+            iv = float(HUD_POSE_THREAD_INTERVAL_SEC)
+            if iv >= 0.001:
+                time.sleep(iv)
+            else:
+                # 1ms 未満: Windows の time.sleep は 1ms より細かく待てない (0 に丸められると空回り) ので、
+                # 時計を見ながら sleep(0) で他のスレッドに譲って待つ
+                t_end = time.perf_counter() + max(0.0001, iv)
+                while time.perf_counter() < t_end:
+                    time.sleep(0)
 
     def _pose_from_thread(self):
         """HUD_POSE_THREAD で、別スレッドの新しい計算結果があればそれ (タプル)、無ければ None (呼ぶ側がその場で読む)。"""
@@ -5330,6 +5365,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ('hud_texture_freeze', "HUD 揺れ調査用: 'fakefar' の絵の描き直しを 通常 → 240 → 120 → 80 → 60 → 40 → 20 → 10 → 5 → 1 回/秒 に絞る (ずらしはそのまま)"),
         ('hud_jitter_csv', "HUD 揺れ調査用: 1枚ごとの時刻とずらし量の CSV の記録を始める / 止める"),
         ('hud_pose_thread', "検証用: 頭の位置の計算を別スレッドで回す (描くときは代入だけ) / 描く側で読む"),
+        ('hud_pose_interval', "検証用: 別スレッドの計算間隔を 1 → 0.5 → 0.25 ms (1ms 未満は CPU を1コアほぼ使う)"),
     ]
 
     def debug_command(self, name):
@@ -5390,6 +5426,8 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             hud_toggle_jitter_csv()
         elif name == 'hud_pose_thread':
             hud_toggle_pose_thread()
+        elif name == 'hud_pose_interval':
+            hud_cycle_pose_interval()
         elif name == 'version':
             print(app_version_text())
             if hud is not None and hasattr(hud, 'show_splash'):
