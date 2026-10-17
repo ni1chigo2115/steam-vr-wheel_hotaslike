@@ -60,6 +60,8 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     頭の姿勢の予測に加えて、目の位置・絵の写し方 (視差と拡大縮小) の計算と、ずらし量の計算・オーバーレイの移動まで行う。
     描く側 (OpenGL) は代入された写し方を読んで描くだけ、ずらしの基準の切り替え (コピー完了のフェンス) だけは描く側に残る
     (別スレッドは次の計算 (約 1ms 以内) で新しい基準を使う)。別スレッドの値が古ければ (HUD_POSE_THREAD_MAX_AGE_SEC) 描く側が自分で計算する。
+  0.1.12 (デバッグ用): 時計の段を 0.1 秒まで出す (HUD_CLOCK_TENTHS、動画と CSV を合わせるため。普段使いでは False)。
+    調査用 CSV に PC の時計の列 'clock' (時:分:秒.ミリ秒) を足した。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -162,7 +164,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.11'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.12'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -349,17 +351,23 @@ def hud_row_cruise():
 
 HUD_CLOCK_ENABLED = True                   # [CONFIG] 通知の段に現在時刻 (PC の時計、時:分:秒) を出す。動画・CSV・ログと見比べる目印
 HUD_CLOCK_FORMAT = '%H:%M:%S'              # [CONFIG] time.strftime の書式。Hornet は大文字・数字・':' '.' '-' は描ける
+HUD_CLOCK_TENTHS = True                    # [CONFIG] (デバッグ用) 秒の後ろに 0.1 秒の桁を出す (動画と CSV を合わせるため)。
+                                           #   文字が 1 秒に 10 回変わるので描き直しが 10 回/秒増える。普段使いでは False
 
 
 def hud_text_clock(v):
     """現在時刻 (HUD_CLOCK_FORMAT)。秒が変わったときだけ文字が変わるので、描き直しは 1 秒に 1 回増えるだけ。"""
-    return time.strftime(HUD_CLOCK_FORMAT)
+    now = time.time()
+    t = time.strftime(HUD_CLOCK_FORMAT, time.localtime(now))
+    if HUD_CLOCK_TENTHS:
+        t += '.{}'.format(int((now % 1.0) * 10.0) % 10)
+    return t
 
 
 def hud_row_clock():
     """現在時刻の段 (いつも出す)。幅は '00:00:00' 分で固定。"""
     return {'id': 'clock', 'on': ['sig:always'],
-            'parts': [{'text_fn': hud_text_clock, 'reserve': '00:00:00',
+            'parts': [{'text_fn': hud_text_clock, 'reserve': '00:00:00.0' if HUD_CLOCK_TENTHS else '00:00:00',
                        'align': 'left'}]}
 
 
@@ -1927,7 +1935,7 @@ class _HudJitterCsv(object):
     HUD 揺れ調査用の CSV (JIT1)。HUD の描画スレッドから row() で1行ずつためて、HUD_JITTER_CSV_FLUSH_SEC ごとにまとめて書く。
     start/stop はキーの処理 (Joystick.update のスレッド) から呼ばれるので、ためる所は lock で守る。
     """
-    COLUMNS = ['t_ms', 'event', 'vsync', 'pose_age_ms', 'gpu_wait_ms', 'since_submit_ms',
+    COLUMNS = ['t_ms', 'clock', 'event', 'vsync', 'pose_age_ms', 'gpu_wait_ms', 'since_submit_ms',
                'ref_x_mm', 'ref_y_mm', 'eye_x_mm', 'eye_y_mm', 'dx_mm', 'dy_mm', 'lead_ms']
 
     def __init__(self):
@@ -1979,6 +1987,7 @@ class _HudJitterCsv(object):
             return
         now = time.time()
         kw['t_ms'] = (now - self._t0) * 1000.0
+        kw['clock'] = time.strftime('%H:%M:%S', time.localtime(now)) + '.{:03d}'.format(int((now % 1.0) * 1000.0))
         kw['event'] = event
         if 'vsync' not in kw:
             kw['vsync'] = _hud_vsync_count()
