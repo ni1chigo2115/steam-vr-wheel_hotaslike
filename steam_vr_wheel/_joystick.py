@@ -24,7 +24,7 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     - V : 'fakefar' のずらしの切り替えを、絵のコピー完了から 0/1/2/3 vsync 後に (HUD_LATE_SHIFT_SWITCH_VSYNC)
     - [ / ] : 頭の位置の予測に足す時間を -2ms / +2ms (HUD_DEPTH_PREDICT_EXTRA_SEC)。\\ で 0 に戻す
     - P / O : (調査用) スティックの数値の段を出す / 隠す、[DPAD] の1行ログを出す / 止める
-    - G : (検証用) 頭の位置の計算を別スレッドで回す / 描く側で読む (HUD_POSE_THREAD)
+    - G : (検証用) 位置の計算を別スレッドで: 切 → 姿勢だけ → 全部 (写し方・拡大縮小・ずらしも) (HUD_POSE_THREAD)
     - K / X / J : (HUD 揺れ調査用 JIT1) ずらしの入/切、絵の描き直しを絞る、調査用 CSV の記録 (下の版の説明を参照)
     - L : HUD のデバッグログを 普通 → 大きく → 隠す (コマンド 'hud_log_cycle')。ほかに 'hud_log_toggle' / 'hud_log_clear' / 'version' (キーなし)
   システム名とバージョン: APP_NAME ('SteamVR Virtual Cockpit') / APP_VERSION / APP_BASE_VERSION。
@@ -56,6 +56,10 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
   0.1.9 (検証用): G キー = 頭の位置の計算を別スレッドに分ける (HUD_POSE_THREAD)。入にすると 'hud_pose' スレッドが
     約 1ms ごとに「絵用の予測」と「ずらし用の予測」を計算して変数に入れ、描くときとずらすときはその最新の値を代入するだけになる。
     切 (既定) は今まで通り、描く直前とずらす直前にそれぞれ自分で読む。
+  0.1.11 (検証用): G キーを 切 → 姿勢だけ → 全部 → 切 の3段に。'全部' (HUD_POSE_THREAD = 'full') では別スレッドが
+    頭の姿勢の予測に加えて、目の位置・絵の写し方 (視差と拡大縮小) の計算と、ずらし量の計算・オーバーレイの移動まで行う。
+    描く側 (OpenGL) は代入された写し方を読んで描くだけ、ずらしの基準の切り替え (コピー完了のフェンス) だけは描く側に残る
+    (別スレッドは次の計算 (約 1ms 以内) で新しい基準を使う)。別スレッドの値が古ければ (HUD_POSE_THREAD_MAX_AGE_SEC) 描く側が自分で計算する。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -158,7 +162,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.9'                      # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.11'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -533,8 +537,9 @@ HUD_LATE_SHIFT_MAX_M = 0.05                # [CONFIG] ずらす量の上限 [m] 
 HUD_TEXTURE_FREEZE_HZ = 0.0                # [CONFIG] 0 = 通常。>0 = 'fakefar' の絵の描き直しをこの回数 [回/秒] までに絞る (ずらしはそのまま)。X キーで切り替え
 HUD_TEXTURE_FREEZE_STEPS = [0.0, 240.0, 120.0, 80.0, 60.0, 40.0, 20.0, 10.0, 5.0, 1.0]   # [CONFIG] X キーで順に切り替える値
 HUD_TEXTURE_FREEZE_SHIFT_MAX_M = 0.30      # [CONFIG] 絞っている間のずらす量の上限 [m] (絵が古いぶん、ずらす量が大きくなるため)
-HUD_POSE_THREAD = False                    # [CONFIG] (検証用) True = 頭の位置の計算を別スレッド ('hud_pose') で約 1ms ごとに回し、
-                                           #   描くとき・ずらすときは最新の値を代入するだけにする。G キーで切り替え
+HUD_POSE_THREAD = False                    # [CONFIG] (検証用) 位置の計算を別スレッド ('hud_pose') で約 1ms ごとに回す。G キーで 切 → 姿勢だけ → 全部。
+                                           #   False = 描く側で計算 (通常) / True ('姿勢だけ') = 頭の姿勢の予測だけ別スレッド /
+                                           #   'full' ('全部') = 写し方 (視差・拡大縮小) とずらしも別スレッド。描く側は代入された値を読むだけ
 HUD_POSE_THREAD_INTERVAL_SEC = 0.001       # [CONFIG] 別スレッドで計算する間隔 [秒]
 HUD_POSE_THREAD_MAX_AGE_SEC = 0.02         # [CONFIG] これより古い計算結果は使わず、その場で読む (別スレッドが止まったときの保険)
 HUD_JITTER_CSV_DIR = None                  # [CONFIG] 調査用 CSV を置くフォルダ。None = この .py と同じフォルダ。J キーで記録の開始 / 停止
@@ -1888,10 +1893,13 @@ def hud_toggle_dpad_log():
 
 
 def hud_toggle_pose_thread():
-    """HUD_POSE_THREAD を入/切 (コンソールの G キー。0.1.9)。"""
+    """HUD_POSE_THREAD を 切 → 姿勢だけ (True) → 全部 ('full') → 切 (コンソールの G キー。0.1.9 / 0.1.11)。"""
     global HUD_POSE_THREAD
-    HUD_POSE_THREAD = not HUD_POSE_THREAD
-    print("[HUD] 頭の位置の計算: {}".format("別スレッドで回し、描くときは代入だけ" if HUD_POSE_THREAD else "描く直前・ずらす直前にその場で読む (通常)"))
+    HUD_POSE_THREAD = True if not HUD_POSE_THREAD else ('full' if HUD_POSE_THREAD != 'full' else False)
+    print("[HUD] 位置の計算: {}".format({
+        False: "描く直前・ずらす直前にその場で計算 (通常)",
+        True: "頭の姿勢の予測だけ別スレッド (描く側は代入された姿勢から計算)",
+        'full': "全部別スレッド (写し方・拡大縮小・ずらし。描く側は代入された写し方を読むだけ)"}[HUD_POSE_THREAD]))
 
 
 def hud_toggle_late_shift():
@@ -3728,6 +3736,12 @@ class HudPlateOverlay(object):
         if due is not None:
             self._shown_dir = due[1]
             self._stats_record(due[2], due[3])
+        lf = self._pose_full_fresh()
+        if lf is not None:
+            # 0.1.11 'full': 別スレッドが計算した写し方を代入するだけ (OpenGL 側は計算しない)
+            self._t_pose = lf[0]
+            self._shift_ref_next = lf[2]
+            return lf[1]
         try:
             lp = self._pose_from_thread()
             if lp is not None:
@@ -4012,6 +4026,8 @@ class HudPlateOverlay(object):
         'far' (虚像と同じ距離) では t = 1 なのでずらさない。前後の動き (拡大縮小) は直さない。
         """
         self._shift_resolve()
+        if self._pose_full_fresh() is not None:
+            return                                          # 0.1.11 'full': ずらしは別スレッドが計算して動かす
         ref = self._shift_ref
         if ref is None:
             return
@@ -4028,7 +4044,12 @@ class HudPlateOverlay(object):
                 p = _read_head_pose(lead)
             except Exception:
                 p = None
-        if p is None:
+        self._late_shift_apply(p, lead)
+
+    def _late_shift_apply(self, p, lead):
+        """姿勢 p (先読み lead で予測したもの) から、ずらし量を計算して遠いオーバーレイを動かす (描く側 / 'full' の別スレッドの両方から)。"""
+        ref = self._shift_ref
+        if p is None or ref is None:
             return
         e = self._mid(self.depth.eyes_from(tuple(float(v) for v in p[0]), p[1], self.stereo))
         fc, k = self._far_geom()
@@ -4364,6 +4385,7 @@ class HudPlateOverlay(object):
         while not self._stop.is_set():
             if not HUD_POSE_THREAD:
                 self._pose_latest = None
+                self._pose_full = None
                 time.sleep(0.005)
                 continue
             try:
@@ -4376,11 +4398,32 @@ class HudPlateOverlay(object):
                 p_shift = _read_head_pose(lead)
                 if p_tex is not None and p_shift is not None:
                     self._pose_latest = (time.time(), p_tex, p_shift, lead)
+                    if HUD_POSE_THREAD == 'full' and self._hybrid_on():
+                        # 0.1.11 'full': 写し方 (視差・拡大縮小) とずらしもここで計算する。描く側はこの値を読むだけ
+                        head = tuple(float(v) for v in p_tex[0])
+                        self.depth.head, self.depth.rot = head, p_tex[1]
+                        self.depth._refresh_eyes()
+                        eyes_now = self.depth.eyes_from(head, p_tex[1], self.stereo)
+                        maps = self._eye_maps(eyes_now, self._shown_dir or eyes_now)
+                        self._pose_full = (time.time(), maps, self._mid(eyes_now))
+                        if self._late_shift_on():
+                            self._late_shift_apply(p_shift, lead)
+                    else:
+                        self._pose_full = None
             except Exception as e:
                 err += 1
                 if err <= 3:
                     print("[HUD Error] 頭の位置の別スレッド: {}: {}".format(type(e).__name__, e))
             time.sleep(max(0.0005, float(HUD_POSE_THREAD_INTERVAL_SEC)))
+
+    def _pose_full_fresh(self):
+        """0.1.11 'full' で、別スレッドの新しい計算結果 (時刻, 写し方, 絵を作った目) があればそれ、無ければ None。"""
+        if HUD_POSE_THREAD != 'full':
+            return None
+        lf = getattr(self, '_pose_full', None)
+        if lf is None or time.time() - lf[0] > float(HUD_POSE_THREAD_MAX_AGE_SEC):
+            return None
+        return lf
 
     def _pose_from_thread(self):
         """HUD_POSE_THREAD で、別スレッドの新しい計算結果があればそれ (タプル)、無ければ None (呼ぶ側がその場で読む)。"""
@@ -5329,7 +5372,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ('hud_late_shift_toggle', "HUD 揺れ調査用: 'fakefar' のずらし (HUD_LATE_SHIFT) を入 / 切"),
         ('hud_texture_freeze', "HUD 揺れ調査用: 'fakefar' の絵の描き直しを 通常 → 240 → 120 → 80 → 60 → 40 → 20 → 10 → 5 → 1 回/秒 に絞る (ずらしはそのまま)"),
         ('hud_jitter_csv', "HUD 揺れ調査用: 1枚ごとの時刻とずらし量の CSV の記録を始める / 止める"),
-        ('hud_pose_thread', "検証用: 頭の位置の計算を別スレッドで回す (描くときは代入だけ) / 描く側で読む"),
+        ('hud_pose_thread', "検証用: 位置の計算を別スレッドで 切 → 姿勢だけ → 全部 (写し方・拡大縮小・ずらしも。描く側は読むだけ)"),
     ]
 
     def debug_command(self, name):
