@@ -62,6 +62,12 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     (別スレッドは次の計算 (約 1ms 以内) で新しい基準を使う)。別スレッドの値が古ければ (HUD_POSE_THREAD_MAX_AGE_SEC) 描く側が自分で計算する。
   0.1.12 (デバッグ用): 時計の段を 0.1 秒まで出す (HUD_CLOCK_TENTHS、動画と CSV を合わせるため。普段使いでは False)。
     調査用 CSV に PC の時計の列 'clock' (時:分:秒.ミリ秒) を足した。
+  0.1.13 (検証用): B キー = 基準の目で描く (HUD_FIXED_REF)。'fakefar' の絵を、今の頭の位置ではなく基準の目 E0
+    (= SACC の設計どおりの見え方。HUD_DEPTH_EYE_OFFSET) から見た形で描き、頭の動きはすべてずらし (上下左右 + 前後) で直す。
+    絵の中身 (計器・数字) はこれまでどおり更新するが、絵に焼き込む頭の位置が変わらないので、絵が届くたびの跳びが出ない (はず)。
+    2026-10-17 の実機 (GPU 待ちが約 100ms の VRSNS) で、絵の描き直しのたびに HUD が跳ぶことがわかったため。
+    U キー = 基準の十字線 (HUD_DEBUG_CROSSHAIR): 基準の目の真正面 (20m 先に見える HUD の中心) に十字を描く。
+    HUD のログを短くする (HUD_LOG_SHORTEN: 括弧の中の説明を省く。コンソールには全文が残る)。折り返しは 6 行まで。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -164,7 +170,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.12'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.13'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -249,7 +255,8 @@ HUD_LOG_GLOW = False                       # [CONFIG] ログの文字ににじ�
 HUD_LOG_PANEL_ALPHA = 0.45                 # [CONFIG] ログの裏の薄板の濃さ (HUD_PANEL_ALPHA の代わり。明るい景色の上でも読めるよう濃いめ)
 HUD_LOG_GAP_PX = 10                        # [CONFIG] 操作インジゲータ (の薄板) とのすき間 [px]
 HUD_LOG_HOLD_SEC = 15.0                    # [CONFIG] 1行を出しておく秒数。0 = 消さない (新しい行に押し出されるまで残る)
-HUD_LOG_WRAP_MAX = 4                       # [CONFIG] 長い1回分の表示を何行まで折り返すか (超えた分は '...' で切る)
+HUD_LOG_WRAP_MAX = 6                       # [CONFIG] 長い1回分の表示を何行まで折り返すか (超えた分は '...' で切る。0.1.12 までは 4)
+HUD_LOG_SHORTEN = True                     # [CONFIG] (0.1.13) HUD に出すときだけ、括弧 () （） の中の説明を省いて短くする。コンソールは全文のまま
 HUD_LOG_FONT = 'hornet_bold'               # [CONFIG] 英数字のフォント (HUD_FONT_FILES の名前)
 HUD_LOG_FONT_JP = 'jp'                     # [CONFIG] 日本語などのフォント (HUD_FONT_FILES の名前)
 HUD_LOG_JP_SCALE = 0.95                    # [CONFIG] 日本語の文字の大きさの倍率 (英数字と高さが合わなければ変える)
@@ -541,6 +548,18 @@ HUD_LATE_SHIFT_VSYNC_TARGET = True         # [CONFIG] ずらしの頭の位置�
                                            #   False = 絵と同じ「常に一定時間先」。実行中はコンソールの T キーで切り替え
 HUD_LATE_SHIFT_RUNNING_START_SEC = 0.003   # [CONFIG] SteamVR が vsync の何秒前に合成を始めるか (この時刻を過ぎたら、その次の画面を狙う)
 HUD_LATE_SHIFT_MAX_M = 0.05                # [CONFIG] ずらす量の上限 [m] (予測が飛んだときに HUD が大きく跳ばないため)
+HUD_FIXED_REF = False                      # [CONFIG] (検証用 0.1.13) True = 'fakefar' の絵を基準の目 E0 から見た形 (設計どおり) で描き、
+                                           #   頭の動きはすべてずらしで直す (絵に頭の位置を焼き込まない)。B キーで切り替え。
+                                           #   ずらし (HUD_LATE_SHIFT) が入のときだけ効く。窓の切り抜きも基準の目のまま (端が少しずれて見える)
+HUD_FIXED_REF_SHIFT_MAX_M = 0.30           # [CONFIG] HUD_FIXED_REF のときのずらす量の上限 [m] (頭が基準の目から離れたぶんだけずらすので大きめ)
+HUD_FIXED_REF_FOLLOW_Z = True              # [CONFIG] HUD_FIXED_REF のとき、頭の前後の動きに合わせてオーバーレイも前後に動かす
+                                           #   (見た目の大きさが変わらない = 20m 先の物と同じ)。板より手前には出さない
+HUD_DEBUG_CROSSHAIR = True                 # [CONFIG] (検証用 0.1.13) 'fakefar' / 'far' で、基準の目の真正面 (HUD の中心) に十字線を描く。U キーで切り替え
+HUD_DEBUG_CROSSHAIR_AT = 'eye'             # [CONFIG] 十字線の場所: 'eye' = 基準の目の真正面 (SACC の照準と同じ。景色の水平線に対して止まって見えるはずの点) /
+                                           #   'plate' = HUD の基準点 (HUD_PLATE_POS。部品の並びの原点)
+HUD_DEBUG_CROSSHAIR_COLOR = (255, 80, 255, 255)   # [CONFIG] 十字線の色 (HUD の色と見分けやすい紫)
+HUD_DEBUG_CROSSHAIR_PX = 60                # [CONFIG] 十字線の腕の長さ [px] (HUD_RENDER_SCALE=1.0 のとき)
+HUD_DEBUG_CROSSHAIR_WIDTH_PX = 3           # [CONFIG] 十字線の太さ [px] (同)
 # --- HUD 揺れ調査用 (JIT1、デバッグ版だけ) ---
 HUD_TEXTURE_FREEZE_HZ = 0.0                # [CONFIG] 0 = 通常。>0 = 'fakefar' の絵の描き直しをこの回数 [回/秒] までに絞る (ずらしはそのまま)。X キーで切り替え
 HUD_TEXTURE_FREEZE_STEPS = [0.0, 240.0, 120.0, 80.0, 60.0, 40.0, 20.0, 10.0, 5.0, 1.0]   # [CONFIG] X キーで順に切り替える値
@@ -570,6 +589,8 @@ DEBUG_KEYMAP = [                           # [CONFIG] コンソールのキー �
     ('x', 'hud_texture_freeze'),           # HUD 揺れ調査用 (JIT1)
     ('j', 'hud_jitter_csv'),               # HUD 揺れ調査用 (JIT1)
     ('g', 'hud_pose_thread'),              # 検証用 (0.1.9)
+    ('b', 'hud_fixed_ref'),                # 検証用 (0.1.13)
+    ('u', 'hud_crosshair'),                # 検証用 (0.1.13)
 ]
 HUD_GFX_BACKEND = 'opengl'                 # [CONFIG] 描画の裏方。今は 'opengl' だけ (D3D11 は予定。HudGfx を継承して足す)
 HUD_THREAD_HIGH_PRIORITY = True            # [CONFIG] HUD の描画スレッドの優先度を上げる (Windows)。ワールド読み込みなど CPU が重いときの遅れ・跳びを減らす。
@@ -949,6 +970,8 @@ class HudLog(object):
 
     def push(self, text):
         text = str(text).replace('\t', '    ').rstrip()
+        if HUD_LOG_SHORTEN:
+            text = _hud_log_shorten(text)
         if not text.strip():
             return
         with self._lock:
@@ -995,6 +1018,23 @@ class HudLog(object):
         if self.mode != 'hidden':
             self._shown = self.mode
         return self.mode
+
+
+def _hud_log_shorten(text):
+    """HUD 用に短くする (0.1.13): 括弧 () （） の中を省き、続く空白を1つにする。行頭の [HUD] などの見出しは残る。"""
+    out = []
+    depth = 0
+    for ch in text:
+        if ch in '(（':
+            depth += 1
+            continue
+        if ch in ')）' and depth > 0:
+            depth -= 1
+            continue
+        if depth == 0:
+            out.append(ch)
+    r = ' '.join(''.join(out).split())
+    return r if r else text
 
 
 HUD_LOG = HudLog()
@@ -1908,6 +1948,21 @@ def hud_toggle_pose_thread():
         False: "描く直前・ずらす直前にその場で計算 (通常)",
         True: "頭の姿勢の予測だけ別スレッド (描く側は代入された姿勢から計算)",
         'full': "全部別スレッド (写し方・拡大縮小・ずらし。描く側は代入された写し方を読むだけ)"}[HUD_POSE_THREAD]))
+
+
+def hud_toggle_fixed_ref():
+    """HUD_FIXED_REF を入/切 (コンソールの B キー。0.1.13)。"""
+    global HUD_FIXED_REF
+    HUD_FIXED_REF = not HUD_FIXED_REF
+    print("[HUD] 基準の目で描く (HUD_FIXED_REF): {}".format(
+        "入 (絵は基準の目の形のまま、頭の動きはずらしで直す)" if HUD_FIXED_REF else "切 (絵を今の頭の位置で描く。通常)"))
+
+
+def hud_toggle_crosshair():
+    """HUD_DEBUG_CROSSHAIR を入/切 (コンソールの U キー。0.1.13)。"""
+    global HUD_DEBUG_CROSSHAIR
+    HUD_DEBUG_CROSSHAIR = not HUD_DEBUG_CROSSHAIR
+    print("[HUD] 基準の十字線: {}".format("出す" if HUD_DEBUG_CROSSHAIR else "隠す"))
 
 
 def hud_toggle_late_shift():
@@ -3530,6 +3585,8 @@ class HudPlateOverlay(object):
                 _, x0, y0, x1, y1, qx0, qy0, qx1, qy1 = mp
                 if x1 > x0 and y1 > y0:
                     gfx.draw_textured(self._tex, qx0, qy0, qx1, qy1, clip=(x0, y0, x1, y1))
+                    if HUD_DEBUG_CROSSHAIR:
+                        self._draw_crosshair(qx0, qy0, qx1, qy1)
                 continue
             if mp is not None:
                 x0, y0, x1, y1 = self._map_rect(mp)
@@ -3543,6 +3600,30 @@ class HudPlateOverlay(object):
                     gfx.fill_rect(HUD_DEBUG_EDGE_INNER_COLOR, e, 0.0, e + e2, float(H))
                     gfx.fill_rect(HUD_DEBUG_EDGE_INNER_COLOR, W - e - e2, 0.0, W - e, float(H))
         gfx.end_output(self._fbo)
+
+    def _draw_crosshair(self, qx0, qy0, qx1, qy1):
+        """
+        0.1.13 検証用: 基準の目 E0 の真正面 (HUD の絵の上の点) に十字線を描く。絵と同じ写し方 (qx0..qy1) で置くので、
+        HUD の記号と同じ 20m 先に見える。頭を動かしてもここが景色に対して止まって見えれば、位置合わせが合っている。
+        """
+        try:
+            eo = self.depth.eye_offset
+            wl, wt = self.layout.window[0], self.layout.window[1]
+            if HUD_DEBUG_CROSSHAIR_AT == 'plate':
+                u, v = -wl, -wt                             # HUD の基準点
+            else:
+                u = eo[0] / self.mpp - wl                   # 基準の目の真正面。素材テクスチャの px (左上から)
+                v = -eo[1] / self.mpp - wt
+            W, H = float(self.plate_w), float(self.plate_h)
+            sx, sy = (qx1 - qx0) / W, (qy1 - qy0) / H
+            cx, cy = qx0 + u * sx, qy0 + v * sy
+            a = float(HUD_DEBUG_CROSSHAIR_PX) * self.ss * sx
+            w = max(1.0, float(HUD_DEBUG_CROSSHAIR_WIDTH_PX) * self.ss * sx) / 2.0
+            col = HUD_DEBUG_CROSSHAIR_COLOR
+            self._gfx.fill_rect(col, cx - a, cy - w, cx + a, cy + w)
+            self._gfx.fill_rect(col, cx - w, cy - a, cx + w, cy + a)
+        except Exception:
+            pass
 
     def _eye_maps(self, eyes_now=None, eyes_dir=None):
         """
@@ -3745,6 +3826,12 @@ class HudPlateOverlay(object):
         if due is not None:
             self._shown_dir = due[1]
             self._stats_record(due[2], due[3])
+        if self._fixed_ref_on():
+            # 0.1.13: 絵は基準の目 E0 から見た形 (毎回同じ写し方)。頭の動きは _late_shift_apply がすべて直す
+            eyes_ref = self._fixed_ref_eyes()
+            self._t_pose = time.time()
+            self._shift_ref_next = self._mid(eyes_ref)
+            return self._eye_maps(eyes_ref, eyes_ref)
         lf = self._pose_full_fresh()
         if lf is not None:
             # 0.1.11 'full': 別スレッドが計算した写し方を代入するだけ (OpenGL 側は計算しない)
@@ -3883,14 +3970,14 @@ class HudPlateOverlay(object):
         if self._hybrid_on() and self._display_on() and HUD_DISPLAY_CONTINUOUS:
             dn = max(1, st.get('dl_n', 0))
             print("[HUD 統計] display (描き続ける) | HUD を渡した {:.1f}回/s ({:.1f}ms ごと) | 頭の位置を読んでから渡し終わるまで "
-                  "平均 {:.1f}ms 最大 {:.1f}ms (うち GPU 待ち 平均 {:.1f}ms) | 先読み {:.1f}ms".format(
+                  "平均 {:.1f}ms 最大 {:.1f}ms うち GPU 待ち 平均 {:.1f}ms | 先読み {:.1f}ms".format(
                       st['submits'] / dt, 1000.0 * dt / max(1, st['submits']),
                       1000.0 * st.get('dl_sum', 0.0) / dn, 1000.0 * st.get('dl_max', 0.0),
                       1000.0 * st.get('fin_sum', 0.0) / dn, 1000.0 * (self._display_predict_sec() or 0.0))
-                  + (" | ずらし {:.0f}回/s 最大 {:.1f}mm (切り替え: コピー + {} vsync 後, 待ち 平均 {:.1f}ms, 更新が止まった最長 {:.1f}ms, 10ms 超 {} 回)".format(
-                      st.get('sh_n', 0) / dt, 1000.0 * st.get('sh_max', 0.0), int(HUD_LATE_SHIFT_SWITCH_VSYNC),
-                      1000.0 * st.get('cw_sum', 0.0) / max(1, st.get('cw_n', 0)),
-                      1000.0 * st.get('sh_gap', 0.0), st.get('sh_gap10', 0))
+                  + (" | ずらし {:.0f}回/s 最大 {:.1f}mm 止まった最長 {:.1f}ms (切り替え: コピー + {} vsync 後, 待ち 平均 {:.1f}ms, 10ms 超 {} 回)".format(
+                      st.get('sh_n', 0) / dt, 1000.0 * st.get('sh_max', 0.0), 1000.0 * st.get('sh_gap', 0.0),
+                      int(HUD_LATE_SHIFT_SWITCH_VSYNC), 1000.0 * st.get('cw_sum', 0.0) / max(1, st.get('cw_n', 0)),
+                      st.get('sh_gap10', 0))
                      if self._late_shift_on() else " | ずらし 切")
                   + (self._comp_watch.text(dt) if self._comp_watch is not None else ""))
             self._stats_reset(now)
@@ -4022,6 +4109,17 @@ class HudPlateOverlay(object):
         return (bool(HUD_LATE_SHIFT) and self._h_far is not None and self._h_main == self._h_far
                 and self._display_on() and bool(HUD_DISPLAY_CONTINUOUS) and self._hybrid_on())
 
+    def _fixed_ref_on(self):
+        """HUD_FIXED_REF (0.1.13) を使うとき: 'fakefar' でずらしが効いている。"""
+        return bool(HUD_FIXED_REF) and self._late_shift_on()
+
+    def _fixed_ref_eyes(self):
+        """基準の目 E0 (両目の真ん中) に、まっすぐ前を向いた頭があるとしたときの目の位置。"""
+        eo = self.depth.eye_offset
+        e0 = (self.x + eo[0], self.y + eo[1], self.z + eo[2])
+        self.depth._refresh_eyes()
+        return self.depth.eyes_from(e0, ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)), self.stereo)
+
     @staticmethod
     def _mid(eyes):
         n = float(len(eyes))
@@ -4066,15 +4164,24 @@ class HudPlateOverlay(object):
         z_virtual = self.z + eo[2] - (max(eo[2], HudDepth.NEAR_LIMIT) + self.depth.distance)
         if e[2] - z_virtual < HudDepth.NEAR_LIMIT:
             return
-        r = 1.0 - (e[2] - fc[2]) / (e[2] - z_virtual)
         lim = float(HUD_LATE_SHIFT_MAX_M)
         if float(HUD_TEXTURE_FREEZE_HZ or 0.0) > 0.0:
             lim = max(lim, float(HUD_TEXTURE_FREEZE_SHIFT_MAX_M))   # 絵を絞っている間は絵が古いので、大きくずらす
+        fz = fc[2]
+        if self._fixed_ref_on():
+            lim = max(lim, float(HUD_FIXED_REF_SHIFT_MAX_M))        # 0.1.13: 基準の目からの差を全部ずらすので大きめ
+            if HUD_FIXED_REF_FOLLOW_Z:
+                # 頭の前後の動きに合わせてオーバーレイも前後へ (目からの距離が変わらない = 見た目の大きさが変わらない)。
+                # 虚像も同じだけ前後するとみなす (keep_size と同じ)。板より手前 (板の 2cm 奥まで) には出さない
+                dz = _hud_clamp(e[2] - ref[2], -lim, min(lim, self.z - 0.02 - fc[2]))
+                fz = fc[2] + dz
+                z_virtual += dz
+        r = 1.0 - (e[2] - fz) / (e[2] - z_virtual)
         dx = _hud_clamp((e[0] - ref[0]) * r, -lim, lim)
         dy = _hud_clamp((e[1] - ref[1]) * r, -lim, lim)
         m = openvr.HmdMatrix34_t()
         m.m[0][0] = m.m[1][1] = m.m[2][2] = 1.0
-        m.m[0][3], m.m[1][3], m.m[2][3] = fc[0] + dx, fc[1] + dy, fc[2]
+        m.m[0][3], m.m[1][3], m.m[2][3] = fc[0] + dx, fc[1] + dy, fz
         self._fn_transform(self._h_far, openvr.TrackingUniverseSeated, openvr.byref(m))
         self._shift_now = (dx, dy)
         if HUD_JITTER_CSV.on:
@@ -5382,6 +5489,8 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ('hud_texture_freeze', "HUD 揺れ調査用: 'fakefar' の絵の描き直しを 通常 → 240 → 120 → 80 → 60 → 40 → 20 → 10 → 5 → 1 回/秒 に絞る (ずらしはそのまま)"),
         ('hud_jitter_csv', "HUD 揺れ調査用: 1枚ごとの時刻とずらし量の CSV の記録を始める / 止める"),
         ('hud_pose_thread', "検証用: 位置の計算を別スレッドで 切 → 姿勢だけ → 全部 (写し方・拡大縮小・ずらしも。描く側は読むだけ)"),
+        ('hud_fixed_ref', "検証用: 'fakefar' の絵を基準の目の形で描き、頭の動きはずらしで直す (入 / 切)"),
+        ('hud_crosshair', "検証用: 基準の目の真正面 (HUD の中心) の十字線を出す / 隠す"),
     ]
 
     def debug_command(self, name):
@@ -5442,6 +5551,10 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             hud_toggle_jitter_csv()
         elif name == 'hud_pose_thread':
             hud_toggle_pose_thread()
+        elif name == 'hud_fixed_ref':
+            hud_toggle_fixed_ref()
+        elif name == 'hud_crosshair':
+            hud_toggle_crosshair()
         elif name == 'version':
             print(app_version_text())
             if hud is not None and hasattr(hud, 'show_splash'):
