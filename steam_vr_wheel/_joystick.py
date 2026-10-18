@@ -78,6 +78,9 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
   0.1.16: 「HUD の中心」を、窓の中心ではなく、ふだん見える部品 (操作インジゲータ・ログ・通知の段) をまとめた四角の真ん中にした
     (HUD_CENTER_CORE_SKIP の段 = デバッグ用・文字テスト用の段は数えない)。部品の置き場所と見え方は変わらない。
     十字線 ('center') と、HUD_CENTER = 'eye' で目の真正面に合わせる点がここになる。
+  0.1.17: 窓 (板) を HUD の中心 (十字線) を真ん中にした左右上下対称の大きさにした (HUD_PLATE_CENTER_ON_CORE)。
+    部品の置き場所と見え方は変わらず、窓の枠だけが十字線のまわりに対称に広がる (テクスチャは少し大きくなる)。
+    立体視のずれの分の余白 (左右) はそのまま足す。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -180,7 +183,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.16'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.17'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -208,6 +211,7 @@ HUD_CENTER = 'low'                         # [CONFIG] (0.1.14) HUD の中心の�
                                            #   'eye' = 窓の中心を基準の目の真正面に合わせる (SACC と同じ。VR のゲーム向け)
 HUD_CENTER_LOW_ADJUST_M = (0.0, 0.0)       # [CONFIG] 'low' のときの微調整 (右, 上) [m]。, / . キーで探した値をここに書く
 HUD_CENTER_EYE_ADJUST_M = (0.0, 0.0)       # [CONFIG] 'eye' のときの微調整 (右, 上) [m]。同上
+HUD_PLATE_CENTER_ON_CORE = True            # [CONFIG] (0.1.17) True = 窓を HUD の中心 (十字線) を真ん中にした対称の大きさにする (HUD_PLATE_SIZE_M = None のとき)。False = 中身ぎりぎりの窓 (0.1.16 まで)
 HUD_CENTER_CORE_SKIP = ('dbg_', 'font_')   # [CONFIG] (0.1.16) HUD の中心を決めるときに数えない通知の段 (id がこの文字で始まる段。デバッグ用・文字テスト用)
 HUD_CENTER_NUDGE_M = 0.005                 # [CONFIG] , / . キー1回で上下に動かす量 [m] (0.55m 先なら約 0.5°)
 HUD_SCALE = 0.85                            # [CONFIG] HUD全体の大きさの倍率 (基準点を中心に、部品も間隔もまとめて拡大縮小)
@@ -1845,6 +1849,18 @@ class HudLayout(object):
             tl = geo.topleft
             sz = geo.size
             rects.append((tl[0], tl[1], tl[0] + sz[0], tl[1] + sz[1]))
+        # 0.1.16: HUD の中心 = ふだん見える部品 (操作インジゲータ・ログ・デバッグ用でない通知の段) をまとめた四角の真ん中
+        skip = tuple(str(v) for v in (HUD_CENTER_CORE_SKIP or ()))
+        core = [self.ind] + list(self.logs)
+        for i, g in enumerate(self.row_geo):
+            rid = str(self.rows[i].get('id', '')) if i < len(self.rows) else ''
+            if not (skip and rid.startswith(skip)):
+                core.append(g)
+        cr = [(g.topleft[0], g.topleft[1], g.topleft[0] + g.size[0], g.topleft[1] + g.size[1]) for g in core if g is not None]
+        core_center = None
+        if cr:
+            core_center = ((min(r[0] for r in cr) + max(r[2] for r in cr)) / 2.0,
+                           (min(r[1] for r in cr) + max(r[3] for r in cr)) / 2.0)
         if HUD_PLATE_SIZE_M is None:
             mg = max(0, int(round(HUD_PLATE_MARGIN_PX * self.ss)))
             mx = mg + self.extra_margin_x
@@ -1852,6 +1868,14 @@ class HudLayout(object):
             wt = min(r[1] for r in rects) - mg
             wr = max(r[2] for r in rects) + mx
             wb = max(r[3] for r in rects) + mg
+            if HUD_PLATE_CENTER_ON_CORE and core_center is not None:
+                # 0.1.17: 窓を十字線 (HUD の中心) のまわりに対称に広げる。部品の位置は変えない
+                ccx, ccy = int(round(core_center[0])), int(round(core_center[1]))
+                hw = max(ccx - wl, wr - ccx)
+                hh = max(ccy - wt, wb - ccy)
+                wl, wr = ccx - hw, ccx + hw
+                wt, wb = ccy - hh, ccy + hh
+                core_center = (float(ccx), float(ccy))
         else:
             pw = max(8, int(round(HUD_PLATE_SIZE_M[0] / self.mpp)))
             ph = max(8, int(round(HUD_PLATE_SIZE_M[1] / self.mpp)))
@@ -1861,19 +1885,7 @@ class HudLayout(object):
         self.plate_w = wr - wl
         self.plate_h = wb - wt
         self.window_center = ((wl + wr) / 2.0, (wt + wb) / 2.0)
-        # 0.1.16: HUD の中心 = ふだん見える部品 (操作インジゲータ・ログ・デバッグ用でない通知の段) をまとめた四角の真ん中
-        skip = tuple(str(v) for v in (HUD_CENTER_CORE_SKIP or ()))
-        core = [self.ind] + list(self.logs)
-        for i, g in enumerate(self.row_geo):
-            rid = str(self.rows[i].get('id', '')) if i < len(self.rows) else ''
-            if not (skip and rid.startswith(skip)):
-                core.append(g)
-        cr = [(g.topleft[0], g.topleft[1], g.topleft[0] + g.size[0], g.topleft[1] + g.size[1]) for g in core if g is not None]
-        if cr:
-            self.core_center = ((min(r[0] for r in cr) + max(r[2] for r in cr)) / 2.0,
-                                (min(r[1] for r in cr) + max(r[3] for r in cr)) / 2.0)
-        else:
-            self.core_center = self.window_center
+        self.core_center = core_center if core_center is not None else self.window_center
         for geo in self._geos():
             geo.base = (geo.topleft[0] - wl, geo.topleft[1] - wt)
 
