@@ -68,6 +68,10 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     2026-10-17 の実機 (GPU 待ちが約 100ms の VRSNS) で、絵の描き直しのたびに HUD が跳ぶことがわかったため。
     U キー = 基準の十字線 (HUD_DEBUG_CROSSHAIR): 基準の目の真正面 (20m 先に見える HUD の中心) に十字を描く。
     HUD のログを短くする (HUD_LOG_SHORTEN: 括弧の中の説明を省く。コンソールには全文が残る)。折り返しは 6 行まで。
+  0.1.14: HUD の中心の位置を選べるようにした (HUD_CENTER)。'low' (既定) = 今まで通り HUD_PLATE_POS (目より下。
+    フラットのゲームの画面にかぶりにくい) / 'eye' = 窓の中心を基準の目の真正面に (SACC と同じ。VR 向け)。
+    Y キーで切り替え、, / . キーで今の位置を上下に微調整 (このセッションだけ。固定する値をコンソールに出す)。
+    ログを HUD の窓で切り抜かない (HUD_LOG_CLIP = False。遠くに見せる処理はそのまま)。置き場所は HUD_LOG_OFFSET_PX で動かせる。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -170,7 +174,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.13'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.14'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -193,6 +197,12 @@ def app_version_short():
 # --- HUD板(1枚の板)の位置と大きさ -------------------------------------------------
 # 基準点 = 下の「操作インジゲータ」「通知インジゲータ」の位置を測る原点。z が板の奥行き位置 (頭からの距離)。
 HUD_PLATE_POS = (0.02, -0.13, -0.55)       # [CONFIG] 基準点 (x, y, z) [m]。y を上げると HUD 全体が上へ (前回 -0.225 は低すぎた)
+HUD_CENTER = 'low'                         # [CONFIG] (0.1.14) HUD の中心の位置。Y キーで切り替え:
+                                           #   'low' (既定) = HUD_PLATE_POS のまま (目より下。フラットのゲームの画面にかぶりにくい)
+                                           #   'eye' = 窓の中心を基準の目の真正面に合わせる (SACC と同じ。VR のゲーム向け)
+HUD_CENTER_LOW_ADJUST_M = (0.0, 0.0)       # [CONFIG] 'low' のときの微調整 (右, 上) [m]。, / . キーで探した値をここに書く
+HUD_CENTER_EYE_ADJUST_M = (0.0, 0.0)       # [CONFIG] 'eye' のときの微調整 (右, 上) [m]。同上
+HUD_CENTER_NUDGE_M = 0.005                 # [CONFIG] , / . キー1回で上下に動かす量 [m] (0.55m 先なら約 0.5°)
 HUD_SCALE = 0.85                            # [CONFIG] HUD全体の大きさの倍率 (基準点を中心に、部品も間隔もまとめて拡大縮小)
 HUD_METERS_PER_PIXEL = 0.12 / 512.0        # [CONFIG] 1px の実寸 [m] (HUD_SCALE=1.0 のとき)
 HUD_PLATE_SIZE_M = None                    # [CONFIG] 板(窓)の大きさ (幅, 高さ)[m]。None = 中身に合わせて自動。数値にすると窓の外ははみ出さず切れる
@@ -256,6 +266,10 @@ HUD_LOG_PANEL_ALPHA = 0.45                 # [CONFIG] ログの裏の薄板の�
 HUD_LOG_GAP_PX = 10                        # [CONFIG] 操作インジゲータ (の薄板) とのすき間 [px]
 HUD_LOG_HOLD_SEC = 15.0                    # [CONFIG] 1行を出しておく秒数。0 = 消さない (新しい行に押し出されるまで残る)
 HUD_LOG_WRAP_MAX = 6                       # [CONFIG] 長い1回分の表示を何行まで折り返すか (超えた分は '...' で切る。0.1.12 までは 4)
+HUD_LOG_CLIP = False                       # [CONFIG] (0.1.14) False = ログは HUD の窓 (板) の形で切り抜かない (頭を動かしても端で切れない)。
+                                           #   遠くに見せる処理 ('fakefar') は HUD と同じ。True = 0.1.13 までと同じく窓で切り抜く
+HUD_LOG_OFFSET_PX = (0, 0)                 # [CONFIG] (0.1.14) ログの置き場所を自動の位置から (右, 上) [px] ずらす (HUD_RENDER_SCALE=1.0 のとき)。
+                                           #   窓の外へ出すと、窓 (と絵) がそのぶん大きくなる
 HUD_LOG_SHORTEN = True                     # [CONFIG] (0.1.13) HUD に出すときだけ、括弧 () （） の中の説明を省いて短くする。コンソールは全文のまま
 HUD_LOG_FONT = 'hornet_bold'               # [CONFIG] 英数字のフォント (HUD_FONT_FILES の名前)
 HUD_LOG_FONT_JP = 'jp'                     # [CONFIG] 日本語などのフォント (HUD_FONT_FILES の名前)
@@ -591,6 +605,9 @@ DEBUG_KEYMAP = [                           # [CONFIG] コンソールのキー �
     ('g', 'hud_pose_thread'),              # 検証用 (0.1.9)
     ('b', 'hud_fixed_ref'),                # 検証用 (0.1.13)
     ('u', 'hud_crosshair'),                # 検証用 (0.1.13)
+    ('y', 'hud_center_toggle'),            # 0.1.14: HUD の中心 低い位置 ⇔ 目の真正面
+    (',', 'hud_center_down'),              # 0.1.14: HUD を少し下へ (このセッションだけ)
+    ('.', 'hud_center_up'),                # 0.1.14: HUD を少し上へ (このセッションだけ)
 ]
 HUD_GFX_BACKEND = 'opengl'                 # [CONFIG] 描画の裏方。今は 'opengl' だけ (D3D11 は予定。HudGfx を継承して足す)
 HUD_THREAD_HIGH_PRIORITY = True            # [CONFIG] HUD の描画スレッドの優先度を上げる (Windows)。ワールド読み込みなど CPU が重いときの遅れ・跳びを減らす。
@@ -1804,7 +1821,8 @@ class HudLayout(object):
                 n = int(8 / scale)
             g.n_lines = max(2, n)
             g.size = (g.text_w + 2 * p, g.n_lines * g.pitch + 2 * p)
-            g.topleft = (int(left - p), int(bottom - g.n_lines * g.pitch - p))
+            off = [float(v) for v in HUD_LOG_OFFSET_PX][:2]
+            g.topleft = (int(left - p + round(off[0] * mult)), int(bottom - g.n_lines * g.pitch - p - round(off[1] * mult)))
             self.logs.append(g)
         self.log, self.log_large = self.logs[0], self.logs[1]
 
@@ -3019,6 +3037,9 @@ class HudPlateOverlay(object):
         self.debug = debug
         self.initialized = False
         self.x, self.y, self.z = (float(v) for v in HUD_PLATE_POS)
+        self.center = 'eye' if str(HUD_CENTER) == 'eye' else 'low'          # 0.1.14: HUD の中心の位置
+        self._center_adj = {'low': [float(v) for v in HUD_CENTER_LOW_ADJUST_M][:2],
+                            'eye': [float(v) for v in HUD_CENTER_EYE_ADJUST_M][:2]}
         self.ss = hud_ss()
         self.mpp_base = float(HUD_METERS_PER_PIXEL) / self.ss      # 内部の絵の 1px の実寸
         self.mpp = self.mpp_base * float(HUD_SCALE)       # 1px の実寸 (拡大縮小込み)
@@ -3227,6 +3248,8 @@ class HudPlateOverlay(object):
 
             self.initialized = True
             atexit.register(self.close)
+            if self.center != 'low' or any(self._center_adj['low']):
+                self.set_center(self.center, quiet=True)
             print("[HUD Info] HUD plate ready: {}x{}px (texture {}x{}{}), {} notice row(s), {} text item(s), depth {}".format(
                 self.plate_w, self.plate_h, self.out_w if self._fbo else self.plate_w,
                 self.out_h if self._fbo else self.plate_h, ' x2 stereo' if self.stereo else '',
@@ -3510,6 +3533,55 @@ class HudPlateOverlay(object):
             except Exception as e:
                 print("[HUD Error] set_position failed: {}".format(e))
 
+    # ---------------------------------------------------------------- HUD の中心の位置 (0.1.14)
+    def _base_eye(self):
+        """基準の目 E0 (シート座標)。HUD を動かしても E0 は動かさない (HUD_PLATE_POS + HUD_DEPTH_EYE_OFFSET か、シート座標の原点)。"""
+        if self._eye_auto:
+            return (0.0, 0.0, 0.0)
+        eo = HUD_DEPTH_EYE_OFFSET
+        return tuple(float(HUD_PLATE_POS[i]) + float(eo[i]) for i in range(3))
+
+    def _center_target(self, name):
+        """HUD の中心を name ('low' / 'eye') にするときの基準点 (x, y)。"""
+        adj = self._center_adj[name]
+        if name == 'eye':
+            # 窓の中心 (plate_center) が E0 の真正面に来る基準点 + 微調整
+            e0 = self._base_eye()
+            wc = self.layout.window_center
+            return (e0[0] - wc[0] * self.mpp + adj[0], e0[1] + wc[1] * self.mpp + adj[1])
+        return (float(HUD_PLATE_POS[0]) + adj[0], float(HUD_PLATE_POS[1]) + adj[1])
+
+    def _move_keep_eye(self, x, y):
+        """基準点を動かす。基準の目 E0 は空間に止めたまま (HUD_DEPTH_EYE_OFFSET を書いているときも)。"""
+        e0 = self._base_eye()
+        self.set_position(x=x, y=y)
+        if not self._eye_auto:
+            self.depth.eye_offset = (e0[0] - self.x, e0[1] - self.y, e0[2] - self.z)
+            self._map_key = None
+            if self.initialized:
+                try:
+                    self._place()
+                except Exception as e:
+                    print("[HUD Error] _place failed: {}".format(e))
+
+    def set_center(self, name, quiet=False):
+        """HUD の中心を 'low' (HUD_PLATE_POS) / 'eye' (窓の中心を基準の目の真正面) にする (Y キー)。"""
+        self.center = 'eye' if name == 'eye' else 'low'
+        x, y = self._center_target(self.center)
+        self._move_keep_eye(x, y)
+        if not quiet:
+            print("[HUD] HUD の中心: {}".format(
+                "目の真正面 (SACC と同じ。VR 向け)" if self.center == 'eye' else "低い位置 (HUD_PLATE_POS。フラットのゲーム向け)"))
+
+    def nudge_center(self, dy):
+        """今の中心の位置を上下に dy [m] 動かす (, / . キー。このセッションだけ)。固定する値をコンソールに出す。"""
+        adj = self._center_adj[self.center]
+        adj[1] += dy
+        x, y = self._center_target(self.center)
+        self._move_keep_eye(x, y)
+        print("[HUD] HUD を{} {:.3f}m: HUD_CENTER_{}_ADJUST_M = ({:.3f}, {:.3f}) (固定するなら [CONFIG] に記入)".format(
+            "上へ" if dy > 0 else "下へ", abs(dy), 'EYE' if self.center == 'eye' else 'LOW', adj[0], adj[1]))
+
     # ---------------------------------------------------------------- 奥行きの操作
     def recenter_depth(self):
         """
@@ -3585,6 +3657,8 @@ class HudPlateOverlay(object):
                 _, x0, y0, x1, y1, qx0, qy0, qx1, qy1 = mp
                 if x1 > x0 and y1 > y0:
                     gfx.draw_textured(self._tex, qx0, qy0, qx1, qy1, clip=(x0, y0, x1, y1))
+                    if not HUD_LOG_CLIP:
+                        self._draw_log_unclipped(qx0, qy0, qx1, qy1)
                     if HUD_DEBUG_CROSSHAIR:
                         self._draw_crosshair(qx0, qy0, qx1, qy1)
                 continue
@@ -3600,6 +3674,30 @@ class HudPlateOverlay(object):
                     gfx.fill_rect(HUD_DEBUG_EDGE_INNER_COLOR, e, 0.0, e + e2, float(H))
                     gfx.fill_rect(HUD_DEBUG_EDGE_INNER_COLOR, W - e - e2, 0.0, W - e, float(H))
         gfx.end_output(self._fbo)
+
+    def _draw_log_unclipped(self, qx0, qy0, qx1, qy1):
+        """
+        0.1.14 (HUD_LOG_CLIP = False): ログの場所だけ、窓の切り抜きなしでもう一度描く (写し方は HUD と同じ = 遠くに見える)。
+        draw_textured は混ぜずに上書きなので、窓の中で重なった所は同じ色のまま。
+        """
+        logs = getattr(self.layout, 'logs', None)
+        if not logs:
+            return
+        try:
+            W, H = float(self.plate_w), float(self.plate_h)
+            sx, sy = (qx1 - qx0) / W, (qy1 - qy0) / H
+            ox, oy = self.out_w / W, self.out_h / H             # 板の px → 出力の px
+            u0 = min(lg.base[0] for lg in logs)
+            v0 = min(lg.base[1] for lg in logs)
+            u1 = max(lg.base[0] + lg.size[0] for lg in logs)
+            v1 = max(lg.base[1] + lg.size[1] for lg in logs)
+            r = (int(_hud_clamp((qx0 + u0 * sx) * ox, 0, self.out_w)), int(_hud_clamp((qy0 + v0 * sy) * oy, 0, self.out_h)),
+                 int(round(_hud_clamp((qx0 + u1 * sx) * ox, 0, self.out_w))),
+                 int(round(_hud_clamp((qy0 + v1 * sy) * oy, 0, self.out_h))))
+            if r[2] > r[0] and r[3] > r[1]:
+                self._gfx.draw_textured(self._tex, qx0, qy0, qx1, qy1, clip=r)
+        except Exception:
+            pass
 
     def _draw_crosshair(self, qx0, qy0, qx1, qy1):
         """
@@ -5491,6 +5589,9 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ('hud_pose_thread', "検証用: 位置の計算を別スレッドで 切 → 姿勢だけ → 全部 (写し方・拡大縮小・ずらしも。描く側は読むだけ)"),
         ('hud_fixed_ref', "検証用: 'fakefar' の絵を基準の目の形で描き、頭の動きはずらしで直す (入 / 切)"),
         ('hud_crosshair', "検証用: 基準の目の真正面 (HUD の中心) の十字線を出す / 隠す"),
+        ('hud_center_toggle', "HUD の中心を 低い位置 (フラットのゲーム向け) ⇔ 目の真正面 (SACC と同じ) に切り替える"),
+        ('hud_center_down', "HUD を少し下へ (HUD_CENTER_NUDGE_M。このセッションだけ。固定する値をコンソールに出す)"),
+        ('hud_center_up', "HUD を少し上へ (同上)"),
     ]
 
     def debug_command(self, name):
@@ -5555,6 +5656,12 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             hud_toggle_fixed_ref()
         elif name == 'hud_crosshair':
             hud_toggle_crosshair()
+        elif name == 'hud_center_toggle':
+            if hud is not None and hasattr(hud, 'set_center'):
+                hud.set_center('eye' if hud.center == 'low' else 'low')
+        elif name in ('hud_center_down', 'hud_center_up'):
+            if hud is not None and hasattr(hud, 'nudge_center'):
+                hud.nudge_center(float(HUD_CENTER_NUDGE_M) * (1.0 if name == 'hud_center_up' else -1.0))
         elif name == 'version':
             print(app_version_text())
             if hud is not None and hasattr(hud, 'show_splash'):
