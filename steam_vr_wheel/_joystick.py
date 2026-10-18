@@ -72,6 +72,9 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     フラットのゲームの画面にかぶりにくい) / 'eye' = 窓の中心を基準の目の真正面に (SACC と同じ。VR 向け)。
     Y キーで切り替え、, / . キーで今の位置を上下に微調整 (このセッションだけ。固定する値をコンソールに出す)。
     ログを HUD の窓で切り抜かない (HUD_LOG_CLIP = False。遠くに見せる処理はそのまま)。置き場所は HUD_LOG_OFFSET_PX で動かせる。
+    (遠いオーバーレイ (板) の端では、ログも HUD と同じく切れる。全天周に HUD を出すときに一緒に直す予定 = 今は仕様)
+  0.1.15: 十字線を HUD の中心 (窓の中心。'low' なら下げた位置、'eye' なら目の真正面と同じ点) に、HUD と同じ色で描く。
+    今のデザインが中心のまわりにどれだけまとまっているかを見るため。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -174,7 +177,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.14'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.15'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -569,9 +572,10 @@ HUD_FIXED_REF_SHIFT_MAX_M = 0.30           # [CONFIG] HUD_FIXED_REF のときの
 HUD_FIXED_REF_FOLLOW_Z = True              # [CONFIG] HUD_FIXED_REF のとき、頭の前後の動きに合わせてオーバーレイも前後に動かす
                                            #   (見た目の大きさが変わらない = 20m 先の物と同じ)。板より手前には出さない
 HUD_DEBUG_CROSSHAIR = True                 # [CONFIG] (検証用 0.1.13) 'fakefar' / 'far' で、基準の目の真正面 (HUD の中心) に十字線を描く。U キーで切り替え
-HUD_DEBUG_CROSSHAIR_AT = 'eye'             # [CONFIG] 十字線の場所: 'eye' = 基準の目の真正面 (SACC の照準と同じ。景色の水平線に対して止まって見えるはずの点) /
+HUD_DEBUG_CROSSHAIR_AT = 'center'          # [CONFIG] 十字線の場所: 'center' (既定) = HUD の中心 (窓の中心。HUD_CENTER = 'low' なら下げた位置、
+                                           #   'eye' なら目の真正面と同じ点) / 'eye' = 基準の目の真正面 (SACC の照準と同じ) /
                                            #   'plate' = HUD の基準点 (HUD_PLATE_POS。部品の並びの原点)
-HUD_DEBUG_CROSSHAIR_COLOR = (255, 80, 255, 255)   # [CONFIG] 十字線の色 (HUD の色と見分けやすい紫)
+HUD_DEBUG_CROSSHAIR_COLOR = None           # [CONFIG] 十字線の色。None = HUD の文字と同じ色 (HUD_TEXT_COLOR)
 HUD_DEBUG_CROSSHAIR_PX = 60                # [CONFIG] 十字線の腕の長さ [px] (HUD_RENDER_SCALE=1.0 のとき)
 HUD_DEBUG_CROSSHAIR_WIDTH_PX = 3           # [CONFIG] 十字線の太さ [px] (同)
 # --- HUD 揺れ調査用 (JIT1、デバッグ版だけ) ---
@@ -3709,6 +3713,8 @@ class HudPlateOverlay(object):
             wl, wt = self.layout.window[0], self.layout.window[1]
             if HUD_DEBUG_CROSSHAIR_AT == 'plate':
                 u, v = -wl, -wt                             # HUD の基準点
+            elif HUD_DEBUG_CROSSHAIR_AT == 'center':
+                u, v = self.plate_w / 2.0, self.plate_h / 2.0     # 窓の中心 (HUD の中心)
             else:
                 u = eo[0] / self.mpp - wl                   # 基準の目の真正面。素材テクスチャの px (左上から)
                 v = -eo[1] / self.mpp - wt
@@ -3717,7 +3723,7 @@ class HudPlateOverlay(object):
             cx, cy = qx0 + u * sx, qy0 + v * sy
             a = float(HUD_DEBUG_CROSSHAIR_PX) * self.ss * sx
             w = max(1.0, float(HUD_DEBUG_CROSSHAIR_WIDTH_PX) * self.ss * sx) / 2.0
-            col = HUD_DEBUG_CROSSHAIR_COLOR
+            col = HUD_DEBUG_CROSSHAIR_COLOR if HUD_DEBUG_CROSSHAIR_COLOR is not None else HUD_TEXT_COLOR
             self._gfx.fill_rect(col, cx - a, cy - w, cx + a, cy + w)
             self._gfx.fill_rect(col, cx - w, cy - a, cx + w, cy + a)
         except Exception:
