@@ -92,6 +92,10 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     (INPUT_BUS_REFRESH_SEC ごとに全部を書き直す)。_virtualpad.py は変えていない (source を付けない書き込みは 'main' 経路になる)。
     十字キーの 19〜22 番だけ 'dpad' 経路にした。確かめるコマンドは 'bus_status' (I キー)。
     計画の全体は非公開の作業メモにある (段階 2 = 生の入力の付け替え、段階 3 = トリガーの状態機械)。
+  0.1.20: 実機で十字キー・トリガー・右スティックの選択がおかしいという報告 (0.1.19) の切り分け用。
+    INPUT_BUS_SKIP_SAME = False で、バスを通したまま、0.1.18 までと同じく呼ばれるたびに vJoy へ書く (同じ値も省かない)。
+    True (既定) は 0.1.19 と同じ。比べ方: INPUT_BUS_ENABLED = False (バスなし) / SKIP_SAME = False / True の 3 つ。
+    bus_status (I キー) に、vJoy への書き込みが失敗した回数と最後の失敗を足した。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -194,7 +198,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.19'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.20'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -5342,6 +5346,7 @@ class VirtualDPad:
 #   - スレッド: 書くのは Joystick.update() と同じスレッドだけ (wheel.py のイベントも同じスレッド)。HUD のスレッドは buttons を読むだけ。
 INPUT_BUS_ENABLED = True                   # [CONFIG] True = vJoy への出力を InputBus 経由にする / False = 0.1.18 までの直接書き込み (比べる用)
 INPUT_BUS_REFRESH_SEC = 1.0                # [CONFIG] この秒数ごとに、今の値を全部 vJoy に書き直す。0 = 書き直さない
+INPUT_BUS_SKIP_SAME = True                 # [CONFIG] (0.1.20) True = 前に書いた値と同じなら vJoy に書かない / False = 呼ばれるたびに書く (0.1.18 までと同じ。切り分け用)
 
 
 class InputBus(object):
@@ -5361,6 +5366,8 @@ class InputBus(object):
         self._last_refresh = time.time()
         self.n_calls = 0         # set_* が呼ばれた回数 (bus_status 用)
         self.n_writes = 0        # 実際に vJoy へ書いた回数 (bus_status 用)
+        self.n_fail = 0          # vJoy への書き込みが失敗した回数 (例外 / POV は戻り値 0)。bus_status 用
+        self.last_fail = ''      # 最後の失敗の中身
 
     def __getattr__(self, name):
         # ここに無い属性 (rID, _sdk, reset など) は元の VJoyDevice へ渡す。
@@ -5385,9 +5392,13 @@ class InputBus(object):
                 merged = True
                 break
         self.buttons[b_id] = merged
-        if self._btn_sent.get(b_id) is merged:
+        if INPUT_BUS_SKIP_SAME and self._btn_sent.get(b_id) is merged:
             return True
-        r = self._dev.set_button(b_id, merged)
+        try:
+            r = self._dev.set_button(b_id, merged)
+        except Exception as e:
+            self._note_fail('button {} = {}: {!r}'.format(b_id, merged, e))
+            raise
         self._btn_sent[b_id] = merged
         self.n_writes += 1
         return r
@@ -5407,9 +5418,13 @@ class InputBus(object):
         """軸に値を出す。値が変わったときだけ vJoy に書く。"""
         self.n_calls += 1
         self.axes[axis_id] = value
-        if self._axis_sent.get(axis_id) == value:
+        if INPUT_BUS_SKIP_SAME and self._axis_sent.get(axis_id) == value:
             return True
-        r = self._dev.set_axis(axis_id, value)
+        try:
+            r = self._dev.set_axis(axis_id, value)
+        except Exception as e:
+            self._note_fail('axis {:#x} = {}: {!r}'.format(axis_id, value, e))
+            raise
         self._axis_sent[axis_id] = value
         self.n_writes += 1
         return r
@@ -5428,9 +5443,13 @@ class InputBus(object):
         """連続 POV に値を出す (-1 = 中立)。値が変わったときだけ vJoy に書く。"""
         self.n_calls += 1
         self.povs[pov_id] = value
-        if self._pov_sent.get(pov_id) == value:
+        if INPUT_BUS_SKIP_SAME and self._pov_sent.get(pov_id) == value:
             return True
         r = self._write_pov(value, pov_id)
+        if r == 0 or r is False:
+            # SetContPov は失敗しても例外を出さず 0 を返す。覚えずに、次の呼び出しでもう一度書く
+            self._note_fail('pov {} = {}: 戻り値 {!r}'.format(pov_id, value, r))
+            return r
         self._pov_sent[pov_id] = value
         self.n_writes += 1
         return r
@@ -5457,6 +5476,10 @@ class InputBus(object):
         for pov_id, v in list(self._pov_sent.items()):
             self._write_pov(v, pov_id)
 
+    def _note_fail(self, text):
+        self.n_fail += 1
+        self.last_fail = text
+
     def status_lines(self):
         """今の状態を文字の行にする (コマンド 'bus_status')。"""
         on = []
@@ -5471,6 +5494,9 @@ class InputBus(object):
             "{}={}".format(p, self.povs[p]) for p in sorted(self.povs.keys())) or 'なし'))
         lines.append("[Bus] 呼び出し {} 回のうち vJoy へ書いたのは {} 回 (知っているボタン {} 個)".format(
             self.n_calls, self.n_writes, len(self.buttons)))
+        lines.append("[Bus] 同じ値を省く: {} / 書き込みの失敗: {} 回{}".format(
+            'する' if INPUT_BUS_SKIP_SAME else 'しない (毎回書く)', self.n_fail,
+            (' (最後: ' + self.last_fail + ')') if self.last_fail else ''))
         return lines
 
 
