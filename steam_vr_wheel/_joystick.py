@@ -11,6 +11,8 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     - Pillow, glfw, PyOpenGL (HUD 用)。GPU は RTX 3060、ヘッドセットは Quest 3。
     - 呼び出し元: steam_vr_wheel/wheel.py が Joystick() を引数なしで作り、毎フレーム update(left_ctr, right_ctr)。
       self.device (vJoy), self.config は親クラス VirtualPad (_virtualpad.py) が用意する。継承順は変えないこと。
+      0.1.19 から、Joystick は self.device を InputBus (出力のバス) で包む。vJoy へは必ず self.device の
+      set_button / set_axis / set_cont_pov で出す (self.device._sdk を直接呼ぶと、バスを通らず OR も見張りも効かない)。
   設定:
     - ユーザーが変える変数には "# [CONFIG]" を付けてある (後で設定ファイルにまとめる予定)。新しい設定にも必ず付ける。
   コンソールのキー (DEBUG_KEYMAP で変えられる。中身は Joystick.debug_command('名前') なので、キー以外からも呼べる):
@@ -26,6 +28,7 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     - P / O : (調査用) スティックの数値の段を出す / 隠す、[DPAD] の1行ログを出す / 止める
     - G : (検証用) 位置の計算を別スレッドで: 切 → 姿勢だけ → 全部 (写し方・拡大縮小・ずらしも) (HUD_POSE_THREAD)
     - K / X / J : (HUD 揺れ調査用 JIT1) ずらしの入/切、絵の描き直しを絞る、調査用 CSV の記録 (下の版の説明を参照)
+    - I : (入力の仮想化) 出力のバスの今の状態をコンソールに 1 回出す (コマンド 'bus_status')
     - L : HUD のデバッグログを 普通 → 大きく → 隠す (コマンド 'hud_log_cycle')。ほかに 'hud_log_toggle' / 'hud_log_clear' / 'version' (キーなし)
   システム名とバージョン: APP_NAME ('SteamVR Virtual Cockpit') / APP_VERSION / APP_BASE_VERSION。
     起動時にコンソールへ表示。HUD は起動時に中央へ大きく出して消え (HUD_SPLASH_*、コマンド 'version' で出し直す)、
@@ -83,6 +86,16 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     立体視のずれの分の余白 (左右) はそのまま足す。
   0.1.18: 窓は 0.1.16 の大きさに戻した (HUD_PLATE_CENTER_ON_CORE = False が既定)。十字線は窓の真ん中 (HUD_DEBUG_CROSSHAIR_AT = 'window')。
     部品のまとまりの真ん中に出すなら 'center'。
+  0.1.19: 入力の仮想化の層の段階 1。vJoy への出力を InputBus (出力のバス) 経由にした。動きは変えていない。
+    Joystick.__init__ が self.device を InputBus に差し替える (INPUT_BUS_ENABLED = False で 0.1.18 までの直接書き込みに戻る)。
+    InputBus は、ボタンを入力経路 (source) ごとに持って OR でまとめ、ボタン・軸・POV を値が変わったときだけ vJoy に書く
+    (INPUT_BUS_REFRESH_SEC ごとに全部を書き直す)。_virtualpad.py は変えていない (source を付けない書き込みは 'main' 経路になる)。
+    十字キーの 19〜22 番だけ 'dpad' 経路にした。確かめるコマンドは 'bus_status' (I キー)。
+    計画の全体は非公開の作業メモにある (段階 2 = 生の入力の付け替え、段階 3 = トリガーの状態機械)。
+  0.1.20: 実機で十字キー・トリガー・右スティックの選択がおかしいという報告 (0.1.19) の切り分け用。
+    INPUT_BUS_SKIP_SAME = False で、バスを通したまま、0.1.18 までと同じく呼ばれるたびに vJoy へ書く (同じ値も省かない)。
+    True (既定) は 0.1.19 と同じ。比べ方: INPUT_BUS_ENABLED = False (バスなし) / SKIP_SAME = False / True の 3 つ。
+    bus_status (I キー) に、vJoy への書き込みが失敗した回数と最後の失敗を足した。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -185,7 +198,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.18'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.20'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -600,6 +613,7 @@ HUD_POSE_THREAD_MAX_AGE_SEC = 0.02         # [CONFIG] これより古い計算�
 HUD_JITTER_CSV_DIR = None                  # [CONFIG] 調査用 CSV を置くフォルダ。None = この .py と同じフォルダ。J キーで記録の開始 / 停止
 HUD_JITTER_CSV_FLUSH_SEC = 0.5             # [CONFIG] CSV をファイルに書き出す間隔 [秒] (毎回書くと HUD の描画が遅れるため、ためてまとめて書く)
 DEBUG_KEYMAP = [                           # [CONFIG] コンソールのキー → デバッグコマンド (Joystick.debug_command の名前)。
+    ('i', 'bus_status'),                   #   (0.1.19) 入力の仮想化: 出力のバスの状態を 1 回表示
     ('h', 'hud_recenter'),                 #   大文字・小文字は区別しない。コマンドの一覧は Joystick.DEBUG_COMMANDS
     ('f', 'hud_cycle_mode'),
     ('s', 'hud_stats'),
@@ -5315,6 +5329,178 @@ class VirtualDPad:
 
 
 # ==============================================================================
+# 入力の仮想化の層 (段階 1): 出力のバス InputBus  (0.1.19)
+# ==============================================================================
+# ■ 役目 (他の LLM 向け)
+#   vJoy へ出す値を 1 か所に集める。入力の仮想化の層 (生の入力 → 名前つきの操作 → 命令 → 出力) の、いちばん出口側。
+#   0.1.18 までは各所が VJoyDevice.set_button / set_axis を直接呼び、後から書いた値が残るだけだった。
+#   InputBus は VJoyDevice と同じメソッド名を持つので、Joystick.__init__ で self.device と差し替えて使う
+#   (知らない属性は元の VJoyDevice へそのまま渡す)。_virtualpad.py は変えなくてよい。
+# ■ 決まり
+#   - ボタン: 入力経路 (source、文字列) ごとに押下を持ち、どれか 1 つでも押していればオン (OR)。
+#     source を書かない呼び出しは 'main' 経路。経路が 1 つだけなら 0.1.18 までと同じ動き (最後に書いた値)。
+#   - 軸と POV: まだ経路を分けない (最後に書いた値)。軸のまとめ方 (深いほう など) は段階 4 で足す。
+#   - vJoy へ書くのは値が変わったときだけ。書き込みは呼ばれたその場で行う (ボタンのイベントを遅らせない)。
+#   - INPUT_BUS_REFRESH_SEC ごとに、今の値を全部書き直す (vJoy 側が外から初期化されたときの保険)。tick() が行う。
+#   - self.buttons (番号 -> オンか) は OR 済みの値。HUD の通知 'vbtn:番号' はこれを読む (前は set_button の見張り)。
+#   - スレッド: 書くのは Joystick.update() と同じスレッドだけ (wheel.py のイベントも同じスレッド)。HUD のスレッドは buttons を読むだけ。
+INPUT_BUS_ENABLED = True                   # [CONFIG] True = vJoy への出力を InputBus 経由にする / False = 0.1.18 までの直接書き込み (比べる用)
+INPUT_BUS_REFRESH_SEC = 1.0                # [CONFIG] この秒数ごとに、今の値を全部 vJoy に書き直す。0 = 書き直さない
+INPUT_BUS_SKIP_SAME = True                 # [CONFIG] (0.1.20) True = 前に書いた値と同じなら vJoy に書かない / False = 呼ばれるたびに書く (0.1.18 までと同じ。切り分け用)
+
+
+class InputBus(object):
+    """vJoy への出力のバス。VJoyDevice と同じ set_button / set_axis / set_cont_pov を持つ (上の説明を参照)。"""
+    DEFAULT_SOURCE = 'main'
+
+    def __init__(self, device, refresh_sec=None):
+        self._dev = device
+        self.buttons = {}        # ボタン番号 -> OR 済みのオン / オフ (HUD の 'vbtn:番号' が読む)
+        self._btn_src = {}       # ボタン番号 -> {経路の名前: 押しているか}
+        self._btn_sent = {}      # ボタン番号 -> vJoy に最後に書いた値
+        self.axes = {}           # 軸 (HID_USAGE_*) -> 今の値 (0x0000〜0x8000)
+        self._axis_sent = {}     # 軸 -> vJoy に最後に書いた値
+        self.povs = {}           # POV 番号 -> 今の値 (-1 = 中立、0〜35999)
+        self._pov_sent = {}      # POV 番号 -> vJoy に最後に書いた値
+        self.refresh_sec = float(INPUT_BUS_REFRESH_SEC if refresh_sec is None else refresh_sec)
+        self._last_refresh = time.time()
+        self.n_calls = 0         # set_* が呼ばれた回数 (bus_status 用)
+        self.n_writes = 0        # 実際に vJoy へ書いた回数 (bus_status 用)
+        self.n_fail = 0          # vJoy への書き込みが失敗した回数 (例外 / POV は戻り値 0)。bus_status 用
+        self.last_fail = ''      # 最後の失敗の中身
+
+    def __getattr__(self, name):
+        # ここに無い属性 (rID, _sdk, reset など) は元の VJoyDevice へ渡す。
+        if name == '_dev':
+            raise AttributeError(name)
+        return getattr(self._dev, name)
+
+    # --- ボタン ---
+    def set_button(self, b_id, value, source=None):
+        """経路 source のボタン b_id を押す / 離す。OR した結果が変わったときだけ vJoy に書く。"""
+        self.n_calls += 1
+        if source is None:
+            source = self.DEFAULT_SOURCE
+        srcs = self._btn_src.get(b_id)
+        if srcs is None:
+            srcs = {}
+            self._btn_src[b_id] = srcs
+        srcs[source] = bool(value)
+        merged = False
+        for v in srcs.values():
+            if v:
+                merged = True
+                break
+        self.buttons[b_id] = merged
+        if INPUT_BUS_SKIP_SAME and self._btn_sent.get(b_id) is merged:
+            return True
+        try:
+            r = self._dev.set_button(b_id, merged)
+        except Exception as e:
+            self._note_fail('button {} = {}: {!r}'.format(b_id, merged, e))
+            raise
+        self._btn_sent[b_id] = merged
+        self.n_writes += 1
+        return r
+
+    def release_source(self, source):
+        """経路 source が押しているボタンを全部離す (経路を止めるとき用)。"""
+        for b_id in list(self._btn_src.keys()):
+            if self._btn_src[b_id].get(source):
+                self.set_button(b_id, False, source)
+
+    def button_sources(self, b_id):
+        """ボタン b_id を今押している経路の名前の一覧 (調べる用)。"""
+        return sorted(k for k, v in self._btn_src.get(b_id, {}).items() if v)
+
+    # --- 軸 ---
+    def set_axis(self, axis_id, value):
+        """軸に値を出す。値が変わったときだけ vJoy に書く。"""
+        self.n_calls += 1
+        self.axes[axis_id] = value
+        if INPUT_BUS_SKIP_SAME and self._axis_sent.get(axis_id) == value:
+            return True
+        try:
+            r = self._dev.set_axis(axis_id, value)
+        except Exception as e:
+            self._note_fail('axis {:#x} = {}: {!r}'.format(axis_id, value, e))
+            raise
+        self._axis_sent[axis_id] = value
+        self.n_writes += 1
+        return r
+
+    # --- POV (連続) ---
+    def _write_pov(self, value, pov_id):
+        # 0.1.18 までの Joystick._set_pov と同じ順で探す。どちらも無ければ何もしない。
+        dev = self._dev
+        if hasattr(dev, 'set_cont_pov'):
+            return dev.set_cont_pov(value, pov_id)
+        if hasattr(dev, '_sdk') and hasattr(dev._sdk, 'SetContPov'):
+            return dev._sdk.SetContPov(int(value), dev.rID, int(pov_id))
+        return None
+
+    def set_cont_pov(self, value, pov_id=1):
+        """連続 POV に値を出す (-1 = 中立)。値が変わったときだけ vJoy に書く。"""
+        self.n_calls += 1
+        self.povs[pov_id] = value
+        if INPUT_BUS_SKIP_SAME and self._pov_sent.get(pov_id) == value:
+            return True
+        r = self._write_pov(value, pov_id)
+        if r == 0 or r is False:
+            # SetContPov は失敗しても例外を出さず 0 を返す。覚えずに、次の呼び出しでもう一度書く
+            self._note_fail('pov {} = {}: 戻り値 {!r}'.format(pov_id, value, r))
+            return r
+        self._pov_sent[pov_id] = value
+        self.n_writes += 1
+        return r
+
+    # --- 毎フレーム ---
+    def tick(self, now=None):
+        """Joystick.update() が毎フレーム呼ぶ。refresh_sec ごとに今の値を全部書き直す。"""
+        if self.refresh_sec <= 0:
+            return False
+        if now is None:
+            now = time.time()
+        if now - self._last_refresh < self.refresh_sec:
+            return False
+        self._last_refresh = now
+        self.refresh()
+        return True
+
+    def refresh(self):
+        """今の値を全部 vJoy に書き直す (値は変えない)。"""
+        for b_id, v in list(self._btn_sent.items()):
+            self._dev.set_button(b_id, v)
+        for axis_id, v in list(self._axis_sent.items()):
+            self._dev.set_axis(axis_id, v)
+        for pov_id, v in list(self._pov_sent.items()):
+            self._write_pov(v, pov_id)
+
+    def _note_fail(self, text):
+        self.n_fail += 1
+        self.last_fail = text
+
+    def status_lines(self):
+        """今の状態を文字の行にする (コマンド 'bus_status')。"""
+        on = []
+        for b_id in sorted(self.buttons.keys()):
+            if self.buttons[b_id]:
+                on.append("{}({})".format(b_id, '+'.join(self.button_sources(b_id))))
+        lines = []
+        lines.append("[Bus] 押下中のボタン (経路): {}".format(' '.join(on) if on else 'なし'))
+        lines.append("[Bus] 軸: {}".format(' '.join(
+            "{:#x}={}".format(a, self.axes[a]) for a in sorted(self.axes.keys())) or 'なし'))
+        lines.append("[Bus] POV: {}".format(' '.join(
+            "{}={}".format(p, self.povs[p]) for p in sorted(self.povs.keys())) or 'なし'))
+        lines.append("[Bus] 呼び出し {} 回のうち vJoy へ書いたのは {} 回 (知っているボタン {} 個)".format(
+            self.n_calls, self.n_writes, len(self.buttons)))
+        lines.append("[Bus] 同じ値を省く: {} / 書き込みの失敗: {} 回{}".format(
+            'する' if INPUT_BUS_SKIP_SAME else 'しない (毎回書く)', self.n_fail,
+            (' (最後: ' + self.last_fail + ')') if self.last_fail else ''))
+        return lines
+
+
+# ==============================================================================
 # メイン Joystick クラス
 # ==============================================================================
 class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, VirtualPad):
@@ -5325,6 +5511,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         self.x = 0
         self.y = 0
         self._vbtn_state = {}          # vJoy ボタン番号 -> 押されているか (通知インジゲータ用)
+        self.bus = None                # InputBus (INPUT_BUS_ENABLED = False か、作れなかったときは None)
         self.cruise_center = False     # センタークルーズ中か (クルーズモード実装時に使う。HUD は 'C' と表示)
         self._hook_vjoy_buttons()
 
@@ -5391,7 +5578,21 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             self.hud = None
 
     def _hook_vjoy_buttons(self):
-        """vJoy へ出すボタンの状態を見張り、HUD の通知 ('vbtn:番号') に使えるようにする。"""
+        """vJoy へ出すボタンの状態を見張り、HUD の通知 ('vbtn:番号') に使えるようにする。
+
+        0.1.19: INPUT_BUS_ENABLED なら self.device を InputBus で包み、その OR 済みのボタンの状態 (bus.buttons) を
+        そのまま通知に使う。VirtualPad (_virtualpad.py) の書き込みも self.device 経由なので、全部バスを通る。
+        False か、作れなかったときは、0.1.18 までと同じく set_button に見張りを付ける。"""
+        if INPUT_BUS_ENABLED:
+            try:
+                self.bus = InputBus(self.device)
+                self.device = self.bus
+                self._vbtn_state = self.bus.buttons
+                print("[Bus] vJoy への出力を InputBus 経由にしました (INPUT_BUS_ENABLED)")
+                return
+            except Exception as e:
+                self.bus = None
+                print("[Bus] Warning: InputBus を作れません。直接書き込みで続けます: {}".format(e))
         try:
             dev = self.device
             orig = dev.set_button
@@ -5520,6 +5721,12 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         self.device.set_axis(HID_USAGE_Z, self._clamp_vjoy(self.grabbable_z.x * 0x8000))
         return self.grabbable_x.x, self.grabbable_y.x, self.grabbable_z.x
 
+    def _out_button(self, b_id, value, source):
+        """経路 source の名前を付けて vJoy のボタンを出す (バスが無いときは 0.1.18 までと同じ直接書き込み)。"""
+        if self.bus is not None:
+            return self.bus.set_button(b_id, value, source)
+        return self.device.set_button(b_id, value)
+
     def _set_pov(self, value, pov_id=1):
         if hasattr(self.device, 'set_cont_pov'):
             self.device.set_cont_pov(value, pov_id)
@@ -5543,13 +5750,13 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         if direction == 5:
             self._dpad_dbg_out = '-'
             for b_id in self.pov_buttons:
-                self.device.set_button(b_id, False)
+                self._out_button(b_id, False, 'dpad')
             self._set_pov(-1, 1)
             return
 
         if is_pov_mode:
             for b_id in self.pov_buttons:
-                self.device.set_button(b_id, False)
+                self._out_button(b_id, False, 'dpad')
 
             pov_angle_map = {
                 8: 0, 9: 4500, 6: 9000, 3: 13500,
@@ -5570,7 +5777,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             active_buttons = button_map.get(direction, [])
             self._dpad_dbg_out = ' '.join(str(b) for b in active_buttons) if active_buttons else 'NONE'
             for b_id in self.pov_buttons:
-                self.device.set_button(b_id, b_id in active_buttons)
+                self._out_button(b_id, b_id in active_buttons, 'dpad')
 
     def _load_pivot_file(self):
         try:
@@ -5621,6 +5828,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ('hud_log_toggle', "HUD のデバッグログを隠す / 出す (出すときは隠す前の大きさ)"),
         ('hud_log_clear', "HUD のデバッグログを消す (コンソールの表示はそのまま)"),
         ('version', "システム名とバージョンを表示する (コンソール + HUD の中央に大きく)"),
+        ('bus_status', "入力の仮想化: 出力のバス (InputBus) の今の状態を 1 回表示する (押下中のボタンと経路、軸、POV、書き込み回数)"),
         ('dpad_debug', "Q29-3 調査用: スティックと VirtualDPad の数値の段を出す / 隠す"),
         ('dpad_log', "Q29-3 調査用: VirtualDPad の方向が変わるたびの [DPAD] の1行ログを出す / 止める"),
         ('hud_late_shift_toggle', "HUD 揺れ調査用: 'fakefar' のずらし (HUD_LATE_SHIFT) を入 / 切"),
@@ -5702,6 +5910,12 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         elif name in ('hud_center_down', 'hud_center_up'):
             if hud is not None and hasattr(hud, 'nudge_center'):
                 hud.nudge_center(float(HUD_CENTER_NUDGE_M) * (1.0 if name == 'hud_center_up' else -1.0))
+        elif name == 'bus_status':
+            if self.bus is None:
+                print("[Bus] InputBus は使っていません (INPUT_BUS_ENABLED = False)。直接書き込みです")
+            else:
+                for line in self.bus.status_lines():
+                    print(line)
         elif name == 'version':
             print(app_version_text())
             if hud is not None and hasattr(hud, 'show_splash'):
@@ -5894,6 +6108,9 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         self.device.set_axis(HID_USAGE_RZ, self._clamp_vjoy(self.throttle_z.x * 0x8000))
         self.device.set_axis(HID_USAGE_RY, self._clamp_vjoy(self.throttle_y.x * 0x8000))
         self.device.set_axis(HID_USAGE_RX, self._clamp_vjoy(self.throttle_x.x * 0x8000))
+
+        if self.bus is not None:
+            self.bus.tick()            # INPUT_BUS_REFRESH_SEC ごとに今の値を全部書き直す
 
         self._log_row()
 
