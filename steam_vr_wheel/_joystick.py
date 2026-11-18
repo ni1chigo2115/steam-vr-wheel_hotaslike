@@ -112,6 +112,12 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     (ボタン 1 / 9 は今までどおり SteamVR の「押した」、軸 SL0 / SL1 は生の値。割り当てへの付け替えは段階 4)。
     確かめ方: 'trigger_test' (R キー) で、引き切りだけ / 半押しと引き切りの両方 に仮の割り当て (ログに出すだけ) を付け、
     成り立った操作を [TRG] の行でコンソールと HUD のログに出す。しきい値は TRIGGER_HALF / TRIGGER_FULL / TRIGGER_RELEASE。
+  0.1.24: 入力の仮想化の段階 4。トリガーのボタン (左 1 番 / 右 9 番) を、SteamVR の「押した」ではなく、
+    アナログの値の引き切り ('<手>.trigger_full'、TRIGGER_FULL 以上で押す、TRIGGER_RELEASE 以下で離す) から出す。
+    **ここでゲームへの出力が変わる** (押したと見なす深さが SteamVR まかせから TRIGGER_FULL に)。
+    TRIGGER_BUTTON_FROM = 'steamvr' で 0.1.23 までの出し方に戻る。軸 SL0 / SL1 と触れた 31 / 32 は今までどおり
+    (どちらも割り当て経由。SL0 / SL1 はスロットル B モードを作るときに、31 / 32 は使い道が決まったときに割り当てを変える)。
+    R キーの「半押しと引き切り」は、半押しに仮の割り当てを付けるので、その間はロックで 1 / 9 番が出なくなる (GEAR を選んでいる間と同じ動き)。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -215,7 +221,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.23'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.24'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -5537,6 +5543,7 @@ class InputBus(object):
 #   RAW_BUTTON_NAMES に無い SteamVR のボタンは '<手>.b<番号>' になる (割り当てが無いので何も出ない。0.1.20 までと同じ)
 # ■ 割り当て (DEFAULT_INPUT_BINDINGS) の 1 行 = (入力の名前, 命令の名前, 引数の dict)。並び順 = 呼ぶ順。
 #   段階 5 でプロファイル JSON から読む予定 (形は 01 の 3.3、命令は「命令名 + 引数」)。今はハードコード。
+#   0.1.24 から、トリガーのボタン (1 / 9) の行は TRIGGER_BUTTON_BINDINGS にあり、default_input_bindings() が足す。
 # ■ 命令 (InputLayer.COMMANDS)
 #   'vjoy_button'      入力が True の間 vJoy のボタン args['button'] を押す。args['press_needs'] = 設定の名前 (config の属性) を
 #                      書くと、その設定がオフのときは押さない (離すのはいつでも)。0.1.20 までの trigger_press_button などと同じ。
@@ -5556,13 +5563,14 @@ RAW_BUTTON_NAMES = [                       # SteamVR のボタン番号 → 名�
     (openvr.k_EButton_A, 'a'),
 ]
 
-DEFAULT_INPUT_BINDINGS = [                 # [CONFIG] 割り当ての既定値 (入力の名前, 命令, 引数)。0.1.20 までの _virtualpad.py の BUTTONS と同じ出力
-    ('left.trigger', 'vjoy_button', {'button': 1, 'press_needs': 'trigger_press_button'}),
+TRIGGER_BUTTON_FROM = 'analog'             # [CONFIG] (0.1.24) トリガーのボタン 1 / 9 の出し方: 'analog' = アナログの値の引き切り ('<手>.trigger_full') /
+                                           #   'steamvr' = SteamVR の「押した」イベント (0.1.23 まで。比べる用)
+
+DEFAULT_INPUT_BINDINGS = [                 # [CONFIG] 割り当ての既定値 (入力の名前, 命令, 引数)。トリガーのボタンは TRIGGER_BUTTON_FROM で下の 2 組から選ぶ
     ('left.grip', 'vjoy_button', {'button': 2}),
     ('left.menu', 'vjoy_button', {'button': 3}),
     ('left.stick_click', 'vjoy_zone_button', {'hand': 'left'}),
     ('left.a', 'vjoy_button', {'button': 17}),
-    ('right.trigger', 'vjoy_button', {'button': 9, 'press_needs': 'trigger_press_button'}),
     ('right.grip', 'vjoy_button', {'button': 10}),
     ('right.menu', 'vjoy_button', {'button': 11}),
     ('right.stick_click', 'vjoy_zone_button', {'hand': 'right'}),
@@ -5574,6 +5582,25 @@ DEFAULT_INPUT_BINDINGS = [                 # [CONFIG] 割り当ての既定値 (
     ('left.pov_mode', 'vjoy_dpad', {'pov': 1, 'buttons': [19, 20, 21, 22]}),     # 0.1.22: 十字キー (モードが変わったとき)
     ('right.stick_dir', 'vjoy_dpad', {'pov': 1, 'buttons': [19, 20, 21, 22]}),   # 0.1.22: 十字キー (方向が変わったとき)
 ]
+
+TRIGGER_BUTTON_BINDINGS = {                # (0.1.24) トリガーのボタンの割り当て。TRIGGER_BUTTON_FROM で選ぶ
+    'analog': [                            #   アナログの値の引き切り (TriggerState のロックを通る。段階 4 からの既定)
+        ('left.trigger_full', 'vjoy_button', {'button': 1, 'press_needs': 'trigger_press_button'}),
+        ('right.trigger_full', 'vjoy_button', {'button': 9, 'press_needs': 'trigger_press_button'}),
+    ],
+    'steamvr': [                           #   SteamVR の「押した」イベント (0.1.23 まで。押したと見なす深さは SteamVR が決める)
+        ('left.trigger', 'vjoy_button', {'button': 1, 'press_needs': 'trigger_press_button'}),
+        ('right.trigger', 'vjoy_button', {'button': 9, 'press_needs': 'trigger_press_button'}),
+    ],
+}
+
+
+def default_input_bindings():
+    """(0.1.24) 既定の割り当て = DEFAULT_INPUT_BINDINGS + TRIGGER_BUTTON_FROM で選んだトリガーのボタン。"""
+    key = TRIGGER_BUTTON_FROM if TRIGGER_BUTTON_FROM in TRIGGER_BUTTON_BINDINGS else 'analog'
+    if key != TRIGGER_BUTTON_FROM:
+        print("[Input] Warning: TRIGGER_BUTTON_FROM = {!r} は知らない値です。'analog' にします".format(TRIGGER_BUTTON_FROM))
+    return list(TRIGGER_BUTTON_BINDINGS[key]) + list(DEFAULT_INPUT_BINDINGS)
 
 # ==============================================================================
 # 入力の仮想化の層 (段階 3): トリガーの状態機械 TriggerState  (0.1.23)
@@ -5651,7 +5678,7 @@ class InputLayer(object):
         self.n_events = 0                 # 名前つきの入力が変わった回数 (bus_status 用)
         self.triggers = {'left': TriggerState(), 'right': TriggerState()}   # 0.1.23: トリガーの状態機械
         self.trigger_test = 0             # 0.1.23: 確かめ用の仮の割り当て 0 = なし / 1 = 引き切りだけ / 2 = 半押しと引き切り
-        for name, cmd, args in (DEFAULT_INPUT_BINDINGS if bindings is None else bindings):
+        for name, cmd, args in (default_input_bindings() if bindings is None else bindings):
             if cmd not in self.COMMANDS:
                 print("[Input] Warning: 知らない命令 '{}' (入力 '{}')。この割り当ては使いません".format(cmd, name))
                 continue
@@ -5687,8 +5714,10 @@ class InputLayer(object):
         """コマンド 'trigger_test': 仮の割り当てを なし → 引き切りだけ → 半押しと引き切り → なし の順に切り替える。"""
         self.trigger_test = (self.trigger_test + 1) % 3
         text = ['なし (ログも止める)', '引き切りだけ', '半押しと引き切り'][self.trigger_test]
-        print("[TRG] 確かめ用の仮の割り当て: {}  (しきい値 半押し {:.2f} / 引き切り {:.2f} / 解除 {:.2f}。ゲームへは何も出しません)".format(
+        print("[TRG] 確かめ用の仮の割り当て: {}  (しきい値 半押し {:.2f} / 引き切り {:.2f} / 解除 {:.2f}。仮の割り当てはゲームへ出しません)".format(
             text, TRIGGER_HALF, TRIGGER_FULL, TRIGGER_RELEASE))
+        if self.trigger_test == 2 and TRIGGER_BUTTON_FROM == 'analog':
+            print("[TRG] 注意: 半押しに仮の割り当てがある間は、ロックで引き切りのボタン (1 / 9 番) がゲームへ出ません (GEAR を選んでいる間と同じ)")
 
     # --- 名前つきの入力 ---
     def set(self, name, value):
@@ -5864,16 +5893,21 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 for hand in ('left', 'right'):
                     for button, b_id in _vp_buttons[hand].items():
                         want = 'vjoy_zone_button' if b_id in (-1, -2) else 'vjoy_button'
-                        got = self.inputs._bind.get(self.inputs.button_name(hand, button), [])
+                        in_name = self.inputs.button_name(hand, button)
+                        if button == openvr.k_EButton_SteamVR_Trigger and TRIGGER_BUTTON_FROM == 'analog':
+                            in_name = hand + '.trigger_full'      # 0.1.24: トリガーのボタンはアナログの引き切りから
+                        got = self.inputs._bind.get(in_name, [])
                         ok = any(c == want and (want != 'vjoy_button' or a.get('button') == b_id) for c, a in got)
                         if not ok:
                             print("[Input] Warning: 割り当ての既定値が _virtualpad.BUTTONS と違います: {} -> {}".format(
-                                self.inputs.button_name(hand, button), b_id))
+                                in_name, b_id))
             except Exception as e:
                 print("[Input] Warning: BUTTONS との照合をできません: {}".format(e))
             if self.trackpad_left_enabled or self.trackpad_right_enabled:
                 print("[Input] Warning: スティックの軸の出力 (trackpad_*_enabled) は InputLayer にまだ無いので出ません")
-            print("[Input] 生の入力を InputLayer 経由にしました (INPUT_BINDINGS_ENABLED)")
+            print("[Input] 生の入力を InputLayer 経由にしました (INPUT_BINDINGS_ENABLED)。トリガーのボタン: {}".format(
+                'アナログの引き切り ({:.2f} で押す / {:.2f} で離す)'.format(TRIGGER_FULL, TRIGGER_RELEASE)
+                if TRIGGER_BUTTON_FROM != 'steamvr' else 'SteamVR の「押した」 (TRIGGER_BUTTON_FROM)'))
         except Exception as e:
             self.inputs = None
             print("[Input] Warning: InputLayer を作れません。0.1.20 の道で続けます: {}".format(e))
