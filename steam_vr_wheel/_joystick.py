@@ -13,6 +13,8 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
       self.device (vJoy), self.config は親クラス VirtualPad (_virtualpad.py) が用意する。継承順は変えないこと。
       0.1.19 から、Joystick は self.device を InputBus (出力のバス) で包む。vJoy へは必ず self.device の
       set_button / set_axis / set_cont_pov で出す (self.device._sdk を直接呼ぶと、バスを通らず OR も見張りも効かない)。
+      0.1.21 から、コントローラーのボタン・トリガーは InputLayer を通る (生の入力 → 名前つきの入力 → 割り当て → 命令 → バス)。
+      新しい入力の出し方は、命令 (InputLayer.COMMANDS) と割り当て (DEFAULT_INPUT_BINDINGS) に足す。生の値を vJoy へ直接書かないこと。
   設定:
     - ユーザーが変える変数には "# [CONFIG]" を付けてある (後で設定ファイルにまとめる予定)。新しい設定にも必ず付ける。
   コンソールのキー (DEBUG_KEYMAP で変えられる。中身は Joystick.debug_command('名前') なので、キー以外からも呼べる):
@@ -96,6 +98,14 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     INPUT_BUS_SKIP_SAME = False で、バスを通したまま、0.1.18 までと同じく呼ばれるたびに vJoy へ書く (同じ値も省かない)。
     True (既定) は 0.1.19 と同じ。比べ方: INPUT_BUS_ENABLED = False (バスなし) / SKIP_SAME = False / True の 3 つ。
     bus_status (I キー) に、vJoy への書き込みが失敗した回数と最後の失敗を足した。
+  0.1.21: 入力の仮想化の段階 2a。十字キー以外の生の入力を InputLayer (生の入力 → 名前つきの入力 → 割り当て → 命令 → バス) に通す。
+    動きは変えていない (割り当ての既定値 DEFAULT_INPUT_BINDINGS が _virtualpad.py の BUTTONS と同じ出力を作る)。
+    VirtualPad (_virtualpad.py) の vJoy への書き込み (ボタン・トリガーの軸 SL0 / SL1・触れた 31 / 32) は使わなくなった。
+    INPUT_BINDINGS_ENABLED = False で 0.1.20 の道 (VirtualPad が書く) に戻る。bus_status (I キー) に名前つきの入力の状態を足した。
+    十字キー (VirtualDPad) は段階 2b でここへ移す (今は 'dpad' 経路で直接バスへ)。
+  0.1.22: 入力の仮想化の段階 2b。十字キー (右スティックの方向 → POV か 19〜22 番) も InputLayer に通す。動きは変えていない。
+    名前つきの入力 'right.stick_dir' (VirtualDPad の方向 1〜9、5 = 中立) と 'left.pov_mode' (POV で出すか) を作り、
+    命令 'vjoy_dpad' が出す。方向の判定 (VirtualDPad、3 回平均とヒステリシス) とモードの判定は 0.1.21 と同じ所で行う。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -175,7 +185,8 @@ except ImportError:
 
 from steam_vr_wheel.pyvjoy.vjoydevice import (
     HID_USAGE_X, HID_USAGE_Y, HID_USAGE_Z,
-    HID_USAGE_RX, HID_USAGE_RY, HID_USAGE_RZ
+    HID_USAGE_RX, HID_USAGE_RY, HID_USAGE_RZ,
+    HID_USAGE_SL0, HID_USAGE_SL1             # 0.1.21: トリガーの軸 (InputLayer の 'vjoy_axis' が使う)
 )
 from steam_vr_wheel._virtualpad import VirtualPad, RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin
 
@@ -198,7 +209,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.20'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.22'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -5501,6 +5512,139 @@ class InputBus(object):
 
 
 # ==============================================================================
+# 入力の仮想化の層 (段階 2a): 生の入力 → 名前つきの入力 → 割り当て → 命令 → バス  (0.1.21)
+# ==============================================================================
+# ■ 役目 (他の LLM 向け)
+#   コントローラーの生の入力 (SteamVR のボタンのイベント、トリガーの値) を、名前つきの入力に変える。
+#   名前つきの入力が変わったら、割り当て (DEFAULT_INPUT_BINDINGS) にある命令を呼び、命令がバス (InputBus) へ出す。
+#   「生の値を軸として出す」も命令の 1 つ ('vjoy_axis')。割り当てに無い入力は、どこにも出ない。
+#   0.1.20 までは VirtualPad (_virtualpad.py) が vJoy へ直接書いていた。その出力を、割り当ての既定値で同じに作る。
+# ■ 名前つきの入力 (段階 2a で作るもの)
+#   '<手>.<ボタン>'       押しているか (True / False)。<手> = left / right、<ボタン> = RAW_BUTTON_NAMES の名前
+#   '<手>.trigger_touch'  トリガーに触れているか (wheel.py の set_trigger_touch_* から)
+#   '<手>.trigger_value'  トリガーの値 0.0〜1.0 (Controller.axis、毎フレーム)
+#   'right.stick_dir'     (0.1.22) 右スティックの方向。VirtualDPad.update の結果 (テンキーの並び 1〜9、5 = 中立)
+#   'left.pov_mode'       (0.1.22) 十字キーを POV で出すか (左のメニューに触れている / 押しているなど。Joystick._update_pad_and_pov)
+#   RAW_BUTTON_NAMES に無い SteamVR のボタンは '<手>.b<番号>' になる (割り当てが無いので何も出ない。0.1.20 までと同じ)
+# ■ 割り当て (DEFAULT_INPUT_BINDINGS) の 1 行 = (入力の名前, 命令の名前, 引数の dict)。並び順 = 呼ぶ順。
+#   段階 5 でプロファイル JSON から読む予定 (形は 01 の 3.3、命令は「命令名 + 引数」)。今はハードコード。
+# ■ 命令 (InputLayer.COMMANDS)
+#   'vjoy_button'      入力が True の間 vJoy のボタン args['button'] を押す。args['press_needs'] = 設定の名前 (config の属性) を
+#                      書くと、その設定がオフのときは押さない (離すのはいつでも)。0.1.20 までの trigger_press_button などと同じ。
+#   'vjoy_zone_button' スティックの押し込み。押した瞬間のスティックの位置の区画 (VirtualPad.get_trackpad_zone) のボタンを押す。
+#                      離したら、その手の区画のボタン (左 4〜8 / 右 12〜16) を全部離す。args['hand'] = 'left' / 'right'
+#   'vjoy_axis'        入力の値 (0.0〜1.0) を vJoy の軸 args['axis'] (HID_USAGE_* の名前) に出す。0x8000 倍して int
+#   'vjoy_dpad'        (0.1.22) 'right.stick_dir' と 'left.pov_mode' から、POV args['pov'] か ボタン args['buttons'] (上 下 左 右) を出す。
+#                      中身は Joystick._dpad_output (0.1.21 までの十字キーの出し方そのまま)。2 つの入力の両方に同じ行を割り当てる
+#   どの命令も、バスへの経路の名前は 'in:' + 入力の名前 (bus_status で見える)。
+INPUT_BINDINGS_ENABLED = True              # [CONFIG] (0.1.21) True = 生の入力を InputLayer に通す / False = 0.1.20 まで (VirtualPad が vJoy へ書く。比べる用)
+
+RAW_BUTTON_NAMES = [                       # SteamVR のボタン番号 → 名前つきの入力の名前 (手の名前の後ろ)
+    (openvr.k_EButton_ApplicationMenu, 'menu'),
+    (openvr.k_EButton_Grip, 'grip'),
+    (openvr.k_EButton_SteamVR_Touchpad, 'stick_click'),
+    (openvr.k_EButton_SteamVR_Trigger, 'trigger'),
+    (openvr.k_EButton_A, 'a'),
+]
+
+DEFAULT_INPUT_BINDINGS = [                 # [CONFIG] 割り当ての既定値 (入力の名前, 命令, 引数)。0.1.20 までの _virtualpad.py の BUTTONS と同じ出力
+    ('left.trigger', 'vjoy_button', {'button': 1, 'press_needs': 'trigger_press_button'}),
+    ('left.grip', 'vjoy_button', {'button': 2}),
+    ('left.menu', 'vjoy_button', {'button': 3}),
+    ('left.stick_click', 'vjoy_zone_button', {'hand': 'left'}),
+    ('left.a', 'vjoy_button', {'button': 17}),
+    ('right.trigger', 'vjoy_button', {'button': 9, 'press_needs': 'trigger_press_button'}),
+    ('right.grip', 'vjoy_button', {'button': 10}),
+    ('right.menu', 'vjoy_button', {'button': 11}),
+    ('right.stick_click', 'vjoy_zone_button', {'hand': 'right'}),
+    ('right.a', 'vjoy_button', {'button': 18}),
+    ('left.trigger_touch', 'vjoy_button', {'button': 31, 'press_needs': 'trigger_pre_press_button'}),
+    ('right.trigger_touch', 'vjoy_button', {'button': 32, 'press_needs': 'trigger_pre_press_button'}),
+    ('left.trigger_value', 'vjoy_axis', {'axis': 'HID_USAGE_SL0'}),
+    ('right.trigger_value', 'vjoy_axis', {'axis': 'HID_USAGE_SL1'}),
+    ('left.pov_mode', 'vjoy_dpad', {'pov': 1, 'buttons': [19, 20, 21, 22]}),     # 0.1.22: 十字キー (モードが変わったとき)
+    ('right.stick_dir', 'vjoy_dpad', {'pov': 1, 'buttons': [19, 20, 21, 22]}),   # 0.1.22: 十字キー (方向が変わったとき)
+]
+
+_ZONE_BUTTONS = {'left': [4, 5, 6, 7, 8], 'right': [12, 13, 14, 15, 16]}   # VirtualPad の区画ボタン (unpressed_*_trackpad と同じ)
+
+
+class InputLayer(object):
+    """生の入力 → 名前つきの入力 → 割り当て → 命令 → バス (上の説明を参照)。owner は Joystick (config と区画の計算に使う)。"""
+    COMMANDS = ['vjoy_button', 'vjoy_zone_button', 'vjoy_axis', 'vjoy_dpad']   # 命令の一覧 (中身は _cmd_<名前>)
+
+    def __init__(self, owner, bus, bindings=None):
+        self.owner = owner
+        self.bus = bus
+        self.values = {}                  # 名前つきの入力 -> 今の値
+        self._button_names = dict(RAW_BUTTON_NAMES)
+        self._bind = {}                   # 入力の名前 -> [(命令, 引数), ...]
+        self.n_events = 0                 # 名前つきの入力が変わった回数 (bus_status 用)
+        for name, cmd, args in (DEFAULT_INPUT_BINDINGS if bindings is None else bindings):
+            if cmd not in self.COMMANDS:
+                print("[Input] Warning: 知らない命令 '{}' (入力 '{}')。この割り当ては使いません".format(cmd, name))
+                continue
+            self._bind.setdefault(name, []).append((cmd, dict(args)))
+
+    # --- 生の入力の入口 (Joystick が wheel.py のイベントと毎フレームの値から呼ぶ) ---
+    def button_name(self, hand, button):
+        return '{}.{}'.format(hand, self._button_names.get(button, 'b{}'.format(button)))
+
+    def button_event(self, hand, button, pressed):
+        self.set(self.button_name(hand, button), bool(pressed))
+
+    def frame(self, left_ctr, right_ctr):
+        self.set('left.trigger_value', float(left_ctr.axis))
+        self.set('right.trigger_value', float(right_ctr.axis))
+
+    # --- 名前つきの入力 ---
+    def set(self, name, value):
+        """名前つきの入力の値を変える。変わったときだけ、割り当ての命令を呼ぶ。"""
+        if name in self.values and self.values[name] == value:
+            return
+        self.values[name] = value
+        self.n_events += 1
+        for cmd, args in self._bind.get(name, ()):
+            getattr(self, '_cmd_' + cmd)(name, value, args)
+
+    # --- 命令 ---
+    def _cmd_vjoy_button(self, name, value, args):
+        if value:
+            need = args.get('press_needs')
+            if need and not getattr(self.owner.config, need):
+                return
+        self.bus.set_button(args['button'], bool(value), 'in:' + name)
+
+    def _cmd_vjoy_zone_button(self, name, value, args):
+        hand = args['hand']
+        src = 'in:' + name
+        if value:
+            self.bus.set_button(self.owner.get_trackpad_zone(right=(hand == 'right')), True, src)
+        else:
+            for b_id in _ZONE_BUTTONS[hand]:
+                self.bus.set_button(b_id, False, src)
+
+    def _cmd_vjoy_axis(self, name, value, args):
+        self.bus.set_axis(globals()[args['axis']], int(value * 0x8000))
+
+    def _cmd_vjoy_dpad(self, name, value, args):
+        if 'right.stick_dir' not in self.values or 'left.pov_mode' not in self.values:
+            return
+        self.owner._dpad_output(bool(self.values['left.pov_mode']), self.values['right.stick_dir'],
+                                'in:right.stick_dir', args.get('buttons'), args.get('pov', 1))
+
+    def status_lines(self):
+        on = sorted(k for k, v in self.values.items() if v is True)
+        lines = ["[Input] 押している入力: {}".format(' '.join(on) if on else 'なし')]
+        lines.append("[Input] トリガーの値: 左 {:.3f} / 右 {:.3f}  (入力が変わった回数 {})".format(
+            float(self.values.get('left.trigger_value', 0.0)), float(self.values.get('right.trigger_value', 0.0)),
+            self.n_events))
+        lines.append("[Input] 十字キー: 方向 {} / {}".format(
+            self.values.get('right.stick_dir', '-'), 'POV' if self.values.get('left.pov_mode') else 'ボタン'))
+        return lines
+
+
+# ==============================================================================
 # メイン Joystick クラス
 # ==============================================================================
 class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, VirtualPad):
@@ -5512,8 +5656,10 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         self.y = 0
         self._vbtn_state = {}          # vJoy ボタン番号 -> 押されているか (通知インジゲータ用)
         self.bus = None                # InputBus (INPUT_BUS_ENABLED = False か、作れなかったときは None)
+        self.inputs = None             # InputLayer (0.1.21。INPUT_BINDINGS_ENABLED = False か、バスが無いときは None)
         self.cruise_center = False     # センタークルーズ中か (クルーズモード実装時に使う。HUD は 'C' と表示)
         self._hook_vjoy_buttons()
+        self._make_input_layer()
 
         # Throttle に感度 (sensitivity) を設定可能 (例: 1.0 = 標準感度)
         # メインスロットル(throttle_z)のみリミッターを有効化 (enable_limiter=True)
@@ -5605,6 +5751,77 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         except Exception as e:
             print("[HUD Warning] vJoyボタンの監視を付けられません: {}".format(e))
 
+    def _make_input_layer(self):
+        """0.1.21: InputLayer を作る (INPUT_BINDINGS_ENABLED かつバスがあるとき)。作れなければ 0.1.20 の道で続ける。"""
+        if not INPUT_BINDINGS_ENABLED or self.bus is None:
+            return
+        try:
+            self.inputs = InputLayer(self, self.bus)
+            # 割り当ての既定値が _virtualpad.py の BUTTONS と食い違っていないか (どちらかを直したとき用)
+            try:
+                from steam_vr_wheel._virtualpad import BUTTONS as _vp_buttons
+                for hand in ('left', 'right'):
+                    for button, b_id in _vp_buttons[hand].items():
+                        want = 'vjoy_zone_button' if b_id in (-1, -2) else 'vjoy_button'
+                        got = self.inputs._bind.get(self.inputs.button_name(hand, button), [])
+                        ok = any(c == want and (want != 'vjoy_button' or a.get('button') == b_id) for c, a in got)
+                        if not ok:
+                            print("[Input] Warning: 割り当ての既定値が _virtualpad.BUTTONS と違います: {} -> {}".format(
+                                self.inputs.button_name(hand, button), b_id))
+            except Exception as e:
+                print("[Input] Warning: BUTTONS との照合をできません: {}".format(e))
+            if self.trackpad_left_enabled or self.trackpad_right_enabled:
+                print("[Input] Warning: スティックの軸の出力 (trackpad_*_enabled) は InputLayer にまだ無いので出ません")
+            print("[Input] 生の入力を InputLayer 経由にしました (INPUT_BINDINGS_ENABLED)")
+        except Exception as e:
+            self.inputs = None
+            print("[Input] Warning: InputLayer を作れません。0.1.20 の道で続けます: {}".format(e))
+
+    def _input_frame(self, left_ctr, right_ctr):
+        """毎フレームの生の入力。InputLayer があればそこへ、無ければ 0.1.20 まで (VirtualPad.update が vJoy へ書く)。"""
+        if self.inputs is None:
+            return super().update(left_ctr, right_ctr)
+        self._pad_feedback(left_ctr, right_ctr)
+        self.inputs.frame(left_ctr, right_ctr)
+
+    def _pad_feedback(self, left_ctr, right_ctr):
+        """VirtualPad.update の vJoy に書かない部分 (スティックの位置を覚える、区画が変わったときの振動) を同じ順で行う。"""
+        self.trackpadLX = left_ctr.trackpadX
+        self.trackpadLY = left_ctr.trackpadY
+        haptic_pulse_strength = 1000
+        left_zone = self._get_zone(self.trackpadLX, self.trackpadLY)
+        crossed = self._check_zone_change(left_zone, self.previous_left_zone)
+        self.previous_left_zone = left_zone
+        if crossed:
+            openvr.VRSystem().triggerHapticPulse(left_ctr.id, 0, haptic_pulse_strength)
+        self.trackpadRX = right_ctr.trackpadX
+        self.trackpadRY = right_ctr.trackpadY
+        right_zone = self._get_zone(self.trackpadRX, self.trackpadRY)
+        crossed = self._check_zone_change(right_zone, self.previous_right_zone)
+        self.previous_right_zone = right_zone
+        if crossed:
+            openvr.VRSystem().triggerHapticPulse(right_ctr.id, 0, haptic_pulse_strength)
+
+    def set_trigger_touch_left(self):
+        if self.inputs is None:
+            return super().set_trigger_touch_left()
+        self.inputs.set('left.trigger_touch', True)
+
+    def set_trigger_touch_right(self):
+        if self.inputs is None:
+            return super().set_trigger_touch_right()
+        self.inputs.set('right.trigger_touch', True)
+
+    def set_trigger_untouch_left(self):
+        if self.inputs is None:
+            return super().set_trigger_untouch_left()
+        self.inputs.set('left.trigger_touch', False)
+
+    def set_trigger_untouch_right(self):
+        if self.inputs is None:
+            return super().set_trigger_untouch_right()
+        self.inputs.set('right.trigger_touch', False)
+
     def set_cece27(self, state):
         self.is_cece27_active = bool(state)
 
@@ -5674,7 +5891,10 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         return bool((self.left_touch_mask >> button_id) & 1)
 
     def set_button_press(self, button, hand):
-        super().set_button_press(button, hand)
+        if self.inputs is not None:
+            self.inputs.button_event(hand, button, True)
+        else:
+            super().set_button_press(button, hand)
         if hand == 'left':
             if button == openvr.k_EButton_Grip:
                 self.throttle_z.grabbed()
@@ -5690,7 +5910,10 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 self.joystick_grabbed = True
 
     def set_button_unpress(self, button, hand):
-        super().set_button_unpress(button, hand)
+        if self.inputs is not None:
+            self.inputs.button_event(hand, button, False)
+        else:
+            super().set_button_unpress(button, hand)
         if hand == 'left':
             if button == openvr.k_EButton_Grip:
                 self.throttle_z.ungrabbed()
@@ -5747,16 +5970,29 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ry = getattr(right_ctr, 'trackpadY', 0.0)
         direction = self.dpad.update(rx, ry)
 
+        if self.inputs is not None:
+            # 0.1.22: 名前つきの入力にして、割り当て ('vjoy_dpad') から出す。変わったときだけ命令が呼ばれる
+            self.inputs.set('left.pov_mode', bool(is_pov_mode))
+            self.inputs.set('right.stick_dir', direction)
+            return
+        self._dpad_output(is_pov_mode, direction, 'dpad')
+
+    def _dpad_output(self, is_pov_mode, direction, source, pov_buttons=None, pov_id=1):
+        """十字キーを vJoy に出す (0.1.21 までの _update_pad_and_pov の後半そのまま)。
+        direction はテンキーの並び (5 = 中立)。POV モードなら POV pov_id に角度、違えば pov_buttons (上 下 左 右) を押す。
+        0.1.22 から InputLayer の命令 'vjoy_dpad' が呼ぶ (InputLayer が無いときは毎フレーム 'dpad' 経路で呼ぶ)。"""
+        if pov_buttons is None:
+            pov_buttons = self.pov_buttons
         if direction == 5:
             self._dpad_dbg_out = '-'
-            for b_id in self.pov_buttons:
-                self._out_button(b_id, False, 'dpad')
-            self._set_pov(-1, 1)
+            for b_id in pov_buttons:
+                self._out_button(b_id, False, source)
+            self._set_pov(-1, pov_id)
             return
 
         if is_pov_mode:
-            for b_id in self.pov_buttons:
-                self._out_button(b_id, False, 'dpad')
+            for b_id in pov_buttons:
+                self._out_button(b_id, False, source)
 
             pov_angle_map = {
                 8: 0, 9: 4500, 6: 9000, 3: 13500,
@@ -5764,10 +6000,10 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             }
             angle = pov_angle_map.get(direction, -1)
             self._dpad_dbg_out = str(angle)
-            self._set_pov(angle, 1)
+            self._set_pov(angle, pov_id)
         else:
-            self._set_pov(-1, 1)
-            btn_up, btn_down, btn_left, btn_right = self.pov_buttons
+            self._set_pov(-1, pov_id)
+            btn_up, btn_down, btn_left, btn_right = pov_buttons
             button_map = {
                 8: [btn_up],
                 6: [btn_right],
@@ -5776,8 +6012,8 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             }
             active_buttons = button_map.get(direction, [])
             self._dpad_dbg_out = ' '.join(str(b) for b in active_buttons) if active_buttons else 'NONE'
-            for b_id in self.pov_buttons:
-                self._out_button(b_id, b_id in active_buttons, 'dpad')
+            for b_id in pov_buttons:
+                self._out_button(b_id, b_id in active_buttons, source)
 
     def _load_pivot_file(self):
         try:
@@ -5828,7 +6064,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ('hud_log_toggle', "HUD のデバッグログを隠す / 出す (出すときは隠す前の大きさ)"),
         ('hud_log_clear', "HUD のデバッグログを消す (コンソールの表示はそのまま)"),
         ('version', "システム名とバージョンを表示する (コンソール + HUD の中央に大きく)"),
-        ('bus_status', "入力の仮想化: 出力のバス (InputBus) の今の状態を 1 回表示する (押下中のボタンと経路、軸、POV、書き込み回数)"),
+        ('bus_status', "入力の仮想化: 出力のバス (InputBus) と InputLayer の今の状態を 1 回表示する (押下中のボタンと経路、軸、POV、書き込み回数、押している入力)"),
         ('dpad_debug', "Q29-3 調査用: スティックと VirtualDPad の数値の段を出す / 隠す"),
         ('dpad_log', "Q29-3 調査用: VirtualDPad の方向が変わるたびの [DPAD] の1行ログを出す / 止める"),
         ('hud_late_shift_toggle', "HUD 揺れ調査用: 'fakefar' のずらし (HUD_LATE_SHIFT) を入 / 切"),
@@ -5915,6 +6151,11 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 print("[Bus] InputBus は使っていません (INPUT_BUS_ENABLED = False)。直接書き込みです")
             else:
                 for line in self.bus.status_lines():
+                    print(line)
+            if self.inputs is None:
+                print("[Input] InputLayer は使っていません (INPUT_BINDINGS_ENABLED = False か、バスが無い)")
+            else:
+                for line in self.inputs.status_lines():
                     print(line)
         elif name == 'version':
             print(app_version_text())
@@ -6075,7 +6316,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         return self._dpad_dbg_vals
 
     def update(self, left_ctr, right_ctr):
-        super().update(left_ctr, right_ctr)
+        self._input_frame(left_ctr, right_ctr)     # 0.1.21: 生の入力は InputLayer へ (無ければ VirtualPad.update)
 
         if self.joystick_grabbed:
             q_curr = get_controller_quaternion(right_ctr)
