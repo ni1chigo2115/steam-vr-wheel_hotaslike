@@ -31,6 +31,7 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     - G : (検証用) 位置の計算を別スレッドで: 切 → 姿勢だけ → 全部 (写し方・拡大縮小・ずらしも) (HUD_POSE_THREAD)
     - K / X / J : (HUD 揺れ調査用 JIT1) ずらしの入/切、絵の描き直しを絞る、調査用 CSV の記録 (下の版の説明を参照)
     - I : (入力の仮想化) 出力のバスの今の状態をコンソールに 1 回出す (コマンド 'bus_status')
+    - R : (入力の仮想化) トリガーの確かめ用の仮の割り当て なし → 引き切りだけ → 半押しと引き切り (コマンド 'trigger_test')
     - L : HUD のデバッグログを 普通 → 大きく → 隠す (コマンド 'hud_log_cycle')。ほかに 'hud_log_toggle' / 'hud_log_clear' / 'version' (キーなし)
   システム名とバージョン: APP_NAME ('SteamVR Virtual Cockpit') / APP_VERSION / APP_BASE_VERSION。
     起動時にコンソールへ表示。HUD は起動時に中央へ大きく出して消え (HUD_SPLASH_*、コマンド 'version' で出し直す)、
@@ -106,6 +107,11 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
   0.1.22: 入力の仮想化の段階 2b。十字キー (右スティックの方向 → POV か 19〜22 番) も InputLayer に通す。動きは変えていない。
     名前つきの入力 'right.stick_dir' (VirtualDPad の方向 1〜9、5 = 中立) と 'left.pov_mode' (POV で出すか) を作り、
     命令 'vjoy_dpad' が出す。方向の判定 (VirtualDPad、3 回平均とヒステリシス) とモードの判定は 0.1.21 と同じ所で行う。
+  0.1.23: 入力の仮想化の段階 3。トリガーの状態機械 TriggerState (半押し・引き切り・解除の 3 つのしきい値とロック) を足した。
+    名前つきの入力 '<手>.trigger_half' / '<手>.trigger_full' を作る。**まだ何にも割り当てていないので、ゲームへの出力は変わらない**
+    (ボタン 1 / 9 は今までどおり SteamVR の「押した」、軸 SL0 / SL1 は生の値。割り当てへの付け替えは段階 4)。
+    確かめ方: 'trigger_test' (R キー) で、引き切りだけ / 半押しと引き切りの両方 に仮の割り当て (ログに出すだけ) を付け、
+    成り立った操作を [TRG] の行でコンソールと HUD のログに出す。しきい値は TRIGGER_HALF / TRIGGER_FULL / TRIGGER_RELEASE。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -209,7 +215,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.22'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.23'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -624,6 +630,7 @@ HUD_POSE_THREAD_MAX_AGE_SEC = 0.02         # [CONFIG] これより古い計算�
 HUD_JITTER_CSV_DIR = None                  # [CONFIG] 調査用 CSV を置くフォルダ。None = この .py と同じフォルダ。J キーで記録の開始 / 停止
 HUD_JITTER_CSV_FLUSH_SEC = 0.5             # [CONFIG] CSV をファイルに書き出す間隔 [秒] (毎回書くと HUD の描画が遅れるため、ためてまとめて書く)
 DEBUG_KEYMAP = [                           # [CONFIG] コンソールのキー → デバッグコマンド (Joystick.debug_command の名前)。
+    ('r', 'trigger_test'),                 #   (0.1.23) 入力の仮想化: トリガーの半押し・引き切りの確かめ ([TRG] のログ)
     ('i', 'bus_status'),                   #   (0.1.19) 入力の仮想化: 出力のバスの状態を 1 回表示
     ('h', 'hud_recenter'),                 #   大文字・小文字は区別しない。コマンドの一覧は Joystick.DEBUG_COMMANDS
     ('f', 'hud_cycle_mode'),
@@ -5525,6 +5532,8 @@ class InputBus(object):
 #   '<手>.trigger_value'  トリガーの値 0.0〜1.0 (Controller.axis、毎フレーム)
 #   'right.stick_dir'     (0.1.22) 右スティックの方向。VirtualDPad.update の結果 (テンキーの並び 1〜9、5 = 中立)
 #   'left.pov_mode'       (0.1.22) 十字キーを POV で出すか (左のメニューに触れている / 押しているなど。Joystick._update_pad_and_pov)
+#   '<手>.trigger_half'   (0.1.23) トリガーの半押しの操作が成り立っているか (TriggerState のロックの決まりを通したもの)
+#   '<手>.trigger_full'   (0.1.23) トリガーの引き切りの操作が成り立っているか (同上)
 #   RAW_BUTTON_NAMES に無い SteamVR のボタンは '<手>.b<番号>' になる (割り当てが無いので何も出ない。0.1.20 までと同じ)
 # ■ 割り当て (DEFAULT_INPUT_BINDINGS) の 1 行 = (入力の名前, 命令の名前, 引数の dict)。並び順 = 呼ぶ順。
 #   段階 5 でプロファイル JSON から読む予定 (形は 01 の 3.3、命令は「命令名 + 引数」)。今はハードコード。
@@ -5566,6 +5575,66 @@ DEFAULT_INPUT_BINDINGS = [                 # [CONFIG] 割り当ての既定値 (
     ('right.stick_dir', 'vjoy_dpad', {'pov': 1, 'buttons': [19, 20, 21, 22]}),   # 0.1.22: 十字キー (方向が変わったとき)
 ]
 
+# ==============================================================================
+# 入力の仮想化の層 (段階 3): トリガーの状態機械 TriggerState  (0.1.23)
+# ==============================================================================
+# ■ 決まり (正本は非公開の作業メモの「01 の 3.6 トリガーのロック」。ここはそれをコードにしたもの)
+#   - 判定はアナログの値 (Controller.axis) だけで行う。SteamVR の「押した」イベントは混ぜない。平均も取らない。
+#   - 区間 (ヒステリシス): 値が TRIGGER_HALF 以上で「半押しの区間」、TRIGGER_FULL 以上で「引き切りの区間」に入る。
+#     どちらも、値が TRIGGER_RELEASE 以下に戻るまで出ない (その間の小さな揺れでは出入りしない)。
+#   - ロック: 割り当てのある操作のうち、先に成り立ったものをすぐ実行する。トリガーが TRIGGER_RELEASE 以下に戻るまで、
+#     同じトリガーの別の操作は成り立たない。半押しに割り当てがあれば、引き切っても引き切りは成り立たない
+#     (例: 右パネルで GEAR を選んでいる間は GUN が出ない)。半押しに割り当てが無ければ、引き切ったときに引き切りが成り立つ。
+#     同じ更新で両方の区間に入ったら半押しを先にする。
+#   - 解除の直後: 戻ったと決まった更新では、新しい操作を成り立たせない (受付は次の更新から)。
+#   - 長押しの続き (機銃など) は、成り立った操作の側の決まりに任せる。ここは「どれが成り立っているか」だけを持つ。
+TRIGGER_HALF = 0.25                        # [CONFIG] (0.1.23) 半押しの区間に入る値 (出発点の例。実機で直す)
+TRIGGER_FULL = 0.90                        # [CONFIG] (0.1.23) 引き切りの区間に入る値 (出発点の例)
+TRIGGER_RELEASE = 0.10                     # [CONFIG] (0.1.23) 戻ったと見なす値。ロックもここで外れる (クルーズのダブルクリックのしやすさにも効く)
+
+
+class TriggerState(object):
+    """1 本のトリガーの区間とロック (上の決まり)。update() を毎フレーム 1 回呼ぶ。"""
+
+    def __init__(self):
+        self.value = 0.0
+        self.half_zone = False     # 半押しの区間にいるか (ヒステリシス込み)
+        self.full_zone = False     # 引き切りの区間にいるか
+        self.fired = None          # 今成り立っている操作: None / 'half' / 'full'
+        self.n_fired = 0           # 操作が成り立った回数 (調べる用)
+
+    def update(self, value, half_assigned, full_assigned):
+        """value = トリガーの値 0〜1。half_assigned / full_assigned = その操作に割り当てがあるか。fired を返す。"""
+        v = float(value)
+        self.value = v
+        if v <= TRIGGER_RELEASE:
+            self.half_zone = False
+            self.full_zone = False
+        else:
+            if v >= TRIGGER_HALF:
+                self.half_zone = True
+            if v >= TRIGGER_FULL:
+                self.full_zone = True
+        if self.fired is not None:
+            if v <= TRIGGER_RELEASE:
+                self.fired = None          # ロックを外す。新しい操作は次の更新から
+            return self.fired
+        if half_assigned and self.half_zone:
+            self.fired = 'half'
+            self.n_fired += 1
+        elif full_assigned and self.full_zone:
+            self.fired = 'full'
+            self.n_fired += 1
+        return self.fired
+
+    def zone_text(self):
+        if self.full_zone:
+            return '引き切り'
+        if self.half_zone:
+            return '半押し'
+        return '戻り'
+
+
 _ZONE_BUTTONS = {'left': [4, 5, 6, 7, 8], 'right': [12, 13, 14, 15, 16]}   # VirtualPad の区画ボタン (unpressed_*_trackpad と同じ)
 
 
@@ -5580,6 +5649,8 @@ class InputLayer(object):
         self._button_names = dict(RAW_BUTTON_NAMES)
         self._bind = {}                   # 入力の名前 -> [(命令, 引数), ...]
         self.n_events = 0                 # 名前つきの入力が変わった回数 (bus_status 用)
+        self.triggers = {'left': TriggerState(), 'right': TriggerState()}   # 0.1.23: トリガーの状態機械
+        self.trigger_test = 0             # 0.1.23: 確かめ用の仮の割り当て 0 = なし / 1 = 引き切りだけ / 2 = 半押しと引き切り
         for name, cmd, args in (DEFAULT_INPUT_BINDINGS if bindings is None else bindings):
             if cmd not in self.COMMANDS:
                 print("[Input] Warning: 知らない命令 '{}' (入力 '{}')。この割り当ては使いません".format(cmd, name))
@@ -5596,6 +5667,28 @@ class InputLayer(object):
     def frame(self, left_ctr, right_ctr):
         self.set('left.trigger_value', float(left_ctr.axis))
         self.set('right.trigger_value', float(right_ctr.axis))
+        for hand, ctr in (('left', left_ctr), ('right', right_ctr)):
+            self._trigger_frame(hand, float(ctr.axis))
+
+    def _trigger_frame(self, hand, value):
+        """0.1.23: トリガーの状態機械を進め、'<手>.trigger_half' / '<手>.trigger_full' を出す。"""
+        n_half = hand + '.trigger_half'
+        n_full = hand + '.trigger_full'
+        ts = self.triggers[hand]
+        old_zone = ts.zone_text()
+        fired = ts.update(value, n_half in self._bind or self.trigger_test >= 2,
+                          n_full in self._bind or self.trigger_test >= 1)
+        if self.trigger_test and ts.zone_text() != old_zone:
+            print("[TRG] {} 区間 {} → {}  (値 {:.2f})".format(hand, old_zone, ts.zone_text(), value))
+        self.set(n_half, fired == 'half')
+        self.set(n_full, fired == 'full')
+
+    def cycle_trigger_test(self):
+        """コマンド 'trigger_test': 仮の割り当てを なし → 引き切りだけ → 半押しと引き切り → なし の順に切り替える。"""
+        self.trigger_test = (self.trigger_test + 1) % 3
+        text = ['なし (ログも止める)', '引き切りだけ', '半押しと引き切り'][self.trigger_test]
+        print("[TRG] 確かめ用の仮の割り当て: {}  (しきい値 半押し {:.2f} / 引き切り {:.2f} / 解除 {:.2f}。ゲームへは何も出しません)".format(
+            text, TRIGGER_HALF, TRIGGER_FULL, TRIGGER_RELEASE))
 
     # --- 名前つきの入力 ---
     def set(self, name, value):
@@ -5604,6 +5697,8 @@ class InputLayer(object):
             return
         self.values[name] = value
         self.n_events += 1
+        if self.trigger_test and (name.endswith('.trigger_half') or name.endswith('.trigger_full')):
+            print("[TRG] {} {}".format(name, '成り立った' if value else '外れた'))
         for cmd, args in self._bind.get(name, ()):
             getattr(self, '_cmd_' + cmd)(name, value, args)
 
@@ -5641,6 +5736,12 @@ class InputLayer(object):
             self.n_events))
         lines.append("[Input] 十字キー: 方向 {} / {}".format(
             self.values.get('right.stick_dir', '-'), 'POV' if self.values.get('left.pov_mode') else 'ボタン'))
+        for hand in ('left', 'right'):
+            ts = self.triggers[hand]
+            lines.append("[Input] トリガー {}: 値 {:.2f} / 区間 {} / 成り立っている操作 {} (成り立った回数 {})".format(
+                hand, ts.value, ts.zone_text(), {None: 'なし', 'half': '半押し', 'full': '引き切り'}[ts.fired], ts.n_fired))
+        lines.append("[Input] しきい値 半押し {:.2f} / 引き切り {:.2f} / 解除 {:.2f}、確かめ用の割り当て {}".format(
+            TRIGGER_HALF, TRIGGER_FULL, TRIGGER_RELEASE, ['なし', '引き切りだけ', '半押しと引き切り'][self.trigger_test]))
         return lines
 
 
@@ -6064,6 +6165,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ('hud_log_toggle', "HUD のデバッグログを隠す / 出す (出すときは隠す前の大きさ)"),
         ('hud_log_clear', "HUD のデバッグログを消す (コンソールの表示はそのまま)"),
         ('version', "システム名とバージョンを表示する (コンソール + HUD の中央に大きく)"),
+        ('trigger_test', "入力の仮想化: トリガーの確かめ用の仮の割り当てを なし → 引き切りだけ → 半押しと引き切り の順に (ゲームへは出さない。[TRG] のログ)"),
         ('bus_status', "入力の仮想化: 出力のバス (InputBus) と InputLayer の今の状態を 1 回表示する (押下中のボタンと経路、軸、POV、書き込み回数、押している入力)"),
         ('dpad_debug', "Q29-3 調査用: スティックと VirtualDPad の数値の段を出す / 隠す"),
         ('dpad_log', "Q29-3 調査用: VirtualDPad の方向が変わるたびの [DPAD] の1行ログを出す / 止める"),
@@ -6146,6 +6248,11 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         elif name in ('hud_center_down', 'hud_center_up'):
             if hud is not None and hasattr(hud, 'nudge_center'):
                 hud.nudge_center(float(HUD_CENTER_NUDGE_M) * (1.0 if name == 'hud_center_up' else -1.0))
+        elif name == 'trigger_test':
+            if self.inputs is None:
+                print("[TRG] InputLayer を使っていないので確かめられません (INPUT_BINDINGS_ENABLED = False)")
+            else:
+                self.inputs.cycle_trigger_test()
         elif name == 'bus_status':
             if self.bus is None:
                 print("[Bus] InputBus は使っていません (INPUT_BUS_ENABLED = False)。直接書き込みです")
