@@ -127,9 +127,14 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
   0.1.26: トリガーの半押しと引き切りの違いを分かりやすくする 3 つ (どれも設定で切れる。決まりは TriggerState の上の説明):
     (1) 振動: 半押しが成り立ったときに 1 回震える (TRIGGER_HAPTIC / 'input.trigger_haptic')。
     (2) HUD: トリガーを引いている間、通知の段に 'L HALF+ R ----' のような区間の段を出す (TRIGGER_HUD、段の id 'dbg_trg')。
-    (3) 二段: ロックを外し、半押しと引き切りの両方を成り立たせる (TRIGGER_LOCK / 'input.trigger_lock')。
+    (3) 二段: ロックを外し、半押しと引き切りの両方を成り立たせる (0.1.26 では TRIGGER_LOCK。0.1.28 から TRIGGER_MODE)。
     同梱に profiles/test_two_stage.json (半押し = 17 / 18、二段) を足した。ロックありの動きは 0.1.25 と同じ。
   0.1.27: トリガーの振動を強く (1 回のパルスを最大の 3999 に、TRIGGER_HAPTIC_PULSES = 4 回続けて出す)。
+  0.1.28: 二段を 2 種類に。TRIGGER_LOCK / 'input.trigger_lock' をやめて TRIGGER_MODE / 'input.trigger_mode' にした:
+    'lock' (今までのロック) / 'both' (0.1.26 の二段。半押しを押したまま引き切りも) / 'switch' (切り替わる二段。引き切ると半押しを離す)。
+    二段では、引き切りたいときに半押しが先に一瞬出るのを避けるため、半押しは TRIGGER_HALF_DELAY_SEC (0.15 秒) 半押しの区間に
+    とどまってから出す。その前に引き切りの区間に入ったら、その引きでは半押しを出さない。待ちの間に戻したら、半押しを短く
+    (TRIGGER_TAP_HOLD_SEC) 出す (軽く叩いたときも半押しとして効くように)。同梱に profiles/test_switch.json を足した。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -233,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.27'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.28'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -5721,10 +5726,15 @@ def list_input_profiles():
 #     同じ更新で両方の区間に入ったら半押しを先にする。
 #   - 解除の直後: 戻ったと決まった更新では、新しい操作を成り立たせない (受付は次の更新から)。
 #   - 長押しの続き (機銃など) は、成り立った操作の側の決まりに任せる。ここは「どれが成り立っているか」だけを持つ。
-#   - (0.1.26) 二段 (ロックなし): TRIGGER_LOCK = False (プロファイルでは settings の 'input.trigger_lock': false) にすると、
-#     半押しと引き切りがそれぞれ自分の区間で成り立つ (半押しで A、そのまま引き切ると 9 番も、のような銃の二段トリガー)。
-#     半押しは引き切りの間も成り立ったまま。どちらも TRIGGER_RELEASE 以下に戻ると外れる。
-#     今はプロファイル全体で 1 つ。パネルの項目ごとに変えるのは、パネルの項目の JSON を決めるときに足す。
+#   - (0.1.26 / 0.1.28) 二段: TRIGGER_MODE (プロファイルでは settings の 'input.trigger_mode') で選ぶ。
+#       'lock'   上のロック (既定)。
+#       'both'   半押しと引き切りがそれぞれ成り立つ。引き切っている間も半押しは成り立ったまま (A を押したまま 9 番も)。
+#       'switch' 切り替わる二段。引き切りが成り立ったら半押しを外す (A を離して 9 番だけ)。戻るまで引き切りのまま。
+#     二段 ('both' / 'switch') の半押しは、すぐには出さない: 値が TRIGGER_HALF_DELAY_SEC の間、半押しの区間にとどまったら出す。
+#     その前に引き切りの区間に入ったら、その引き (戻るまで) では半押しを出さない (引き切りたいときに A が先に一瞬出るのを避ける)。
+#     待ちの間に TRIGGER_RELEASE 以下へ戻したら、半押しを TRIGGER_TAP_HOLD_SEC だけ出す (軽く叩いたときも半押しとして効く)。
+#     どちらも TRIGGER_RELEASE 以下に戻ると外れる。今はプロファイル全体で 1 つ。パネルの項目ごとに変えるのは、
+#     パネルの項目の JSON を決めるときに足す。
 #   - (0.1.26) 振動: TRIGGER_HAPTIC = True (プロファイルでは 'input.trigger_haptic') なら、半押しが成り立ったとき、
 #     または半押しに割り当てがあるトリガーで引き切りが成り立ったときに、そのコントローラーを 1 回短く震わせる。
 #     引き切りだけの割り当て (ふつうの射撃) では震わせない (トリガーの底の手応えで分かるため)。
@@ -5732,7 +5742,11 @@ def list_input_profiles():
 TRIGGER_HALF = 0.25                        # [CONFIG] (0.1.23) 半押しの区間に入る値 (出発点の例。実機で直す)
 TRIGGER_FULL = 0.90                        # [CONFIG] (0.1.23) 引き切りの区間に入る値 (出発点の例)
 TRIGGER_RELEASE = 0.10                     # [CONFIG] (0.1.23) 戻ったと見なす値。ロックもここで外れる (クルーズのダブルクリックのしやすさにも効く)
-TRIGGER_LOCK = True                        # [CONFIG] (0.1.26) True = ロック (先に成り立った操作だけ) / False = 二段 (上の説明)。プロファイルの 'input.trigger_lock' が優先
+TRIGGER_MODE = 'lock'                      # [CONFIG] (0.1.28) 'lock' / 'both' / 'switch' (上の説明)。プロファイルの 'input.trigger_mode' が優先
+TRIGGER_HALF_DELAY_SEC = 0.15              # [CONFIG] (0.1.28) 二段で半押しを出すまでの待ち [秒]。短いと引き切るときに A が出やすく、長いと半押しが遅れる。
+                                           #   プロファイルの 'input.trigger_half_delay' が優先。'lock' では使わない (ロックの決まりを変えないため)
+TRIGGER_TAP_HOLD_SEC = 0.08                # [CONFIG] (0.1.28) 二段で、待ちの間に戻したときに半押しを出しておく時間 [秒]
+TRIGGER_MODES = ('lock', 'both', 'switch')
 TRIGGER_HAPTIC = True                      # [CONFIG] (0.1.26) 半押しが成り立ったときに震わせるか (上の説明)。プロファイルの 'input.trigger_haptic' が優先
 TRIGGER_HAPTIC_STRENGTH = 3999             # [CONFIG] (0.1.26) 1 回のパルスの長さ [マイクロ秒] (triggerHapticPulse に渡す値。最大 3999。区画の振動は 1000)。
                                            #   0.1.27: 1500 では弱すぎた (実機) ので最大に
@@ -5748,14 +5762,20 @@ class TriggerState(object):
         self.half_zone = False     # 半押しの区間にいるか (ヒステリシス込み)
         self.full_zone = False     # 引き切りの区間にいるか
         self.fired = None          # 今成り立っている操作: None / 'half' / 'full' (二段のときは引き切りを優先して 1 つ)
+        self._half_since = None    # (0.1.28) 二段: 半押しの区間に入った時刻 (戻るまで)
+        self._half_ok = False      # (0.1.28) 二段: この引きで半押しを出してよいと決まった
+        self._half_skip = False    # (0.1.28) 二段: 待ちの間に引き切りに入ったので、この引きでは半押しを出さない
+        self._tap_until = 0.0      # (0.1.28) 二段: 待ちの間に戻したときの短い半押しの終わりの時刻
         self.half_on = False       # (0.1.26) 半押しが成り立っているか
         self.full_on = False       # (0.1.26) 引き切りが成り立っているか (ロックありなら half_on と同時には立たない)
         self.n_fired = 0           # 操作が成り立った回数 (調べる用)
 
-    def update(self, value, half_assigned, full_assigned, thresholds=None, lock=True):
+    def update(self, value, half_assigned, full_assigned, thresholds=None, mode='lock', now=None,
+               half_delay=None, tap_hold=None):
         """value = トリガーの値 0〜1。half_assigned / full_assigned = その操作に割り当てがあるか。fired を返す。
         thresholds = (半押し, 引き切り, 解除)。None なら TRIGGER_HALF / TRIGGER_FULL / TRIGGER_RELEASE (0.1.25: プロファイルで変えられる)。
-        lock = False で二段 (0.1.26。上の説明)。"""
+        mode = 'lock' / 'both' / 'switch' (0.1.28。上の説明)。now = 今の時刻 [秒] (None なら time.time())。
+        half_delay / tap_hold = 二段の待ちと短い半押しの時間 (None なら TRIGGER_HALF_DELAY_SEC / TRIGGER_TAP_HOLD_SEC)。"""
         half, full, release = thresholds if thresholds else (TRIGGER_HALF, TRIGGER_FULL, TRIGGER_RELEASE)
         v = float(value)
         self.value = v
@@ -5767,10 +5787,28 @@ class TriggerState(object):
                 self.half_zone = True
             if v >= full:
                 self.full_zone = True
-        if not lock:
-            # 二段: それぞれの区間にいる間だけ成り立つ。戻った更新では区間が両方外れているので、ロックと同じく次の更新から受け付ける
-            half_on = bool(half_assigned and self.half_zone)
+        if mode != 'lock':
+            # 二段: 引き切りは区間にいる間だけ。半押しは待ってから (上の説明)。戻った更新では区間が両方外れている
+            now = time.time() if now is None else now
+            half_delay = TRIGGER_HALF_DELAY_SEC if half_delay is None else half_delay
+            tap_hold = TRIGGER_TAP_HOLD_SEC if tap_hold is None else tap_hold
             full_on = bool(full_assigned and self.full_zone)
+            if half_assigned and self.half_zone:
+                if self._half_since is None:
+                    self._half_since = now
+                if full_on and not self._half_ok:
+                    self._half_skip = True             # 待ちの間に引き切った: この引きでは半押しを出さない
+                if not self._half_ok and not self._half_skip and now - self._half_since >= half_delay:
+                    self._half_ok = True
+            elif not self.half_zone:
+                if (half_assigned and self._half_since is not None and not self._half_ok and not self._half_skip
+                        and tap_hold > 0):
+                    self._tap_until = now + tap_hold   # 待ちの間に戻した: 短く半押しを出す
+                self._half_since = None
+                self._half_ok = False
+                self._half_skip = False
+            half_on = bool(half_assigned and ((self._half_ok and self.half_zone and not (mode == 'switch' and full_on))
+                                              or now < self._tap_until))
             self.n_fired += int(half_on and not self.half_on) + int(full_on and not self.full_on)
             self.half_on, self.full_on = half_on, full_on
             self.fired = 'full' if full_on else ('half' if half_on else None)
@@ -5819,7 +5857,17 @@ class InputLayer(object):
         settings = (profile or {}).get('settings') or {}
         self.thresholds = self._read_thresholds(settings)          # (半押し, 引き切り, 解除)
         self.trigger_button_from = settings.get('input.trigger_button_from', TRIGGER_BUTTON_FROM)
-        self.trigger_lock = self._read_bool(settings, 'input.trigger_lock', TRIGGER_LOCK)        # 0.1.26
+        self.trigger_mode = settings.get('input.trigger_mode', TRIGGER_MODE)                    # 0.1.28
+        if self.trigger_mode not in TRIGGER_MODES:
+            print("[Input] Warning: 'input.trigger_mode' は {} のどれか (今の値 {!r})。'lock' を使います".format(
+                ' / '.join(TRIGGER_MODES), self.trigger_mode))
+            self.trigger_mode = 'lock'
+        self.trigger_lock = self.trigger_mode == 'lock'
+        try:
+            self.trigger_half_delay = max(0.0, float(settings.get('input.trigger_half_delay', TRIGGER_HALF_DELAY_SEC)))
+        except Exception:
+            print("[Input] Warning: 'input.trigger_half_delay' を読めません。{} を使います".format(TRIGGER_HALF_DELAY_SEC))
+            self.trigger_half_delay = TRIGGER_HALF_DELAY_SEC
         self.trigger_haptic = self._read_bool(settings, 'input.trigger_haptic', TRIGGER_HAPTIC)  # 0.1.26
         if bindings is None and profile:
             bindings = profile['bindings']
@@ -5893,7 +5941,7 @@ class InputLayer(object):
 
     def _trigger_frame(self, hand, value, ctr=None):
         """0.1.23: トリガーの状態機械を進め、'<手>.trigger_half' / '<手>.trigger_full' を出す。
-        0.1.26: 二段 (self.trigger_lock = False) と、成り立ったときの振動 (self.trigger_haptic。ctr はそのコントローラー)。"""
+        0.1.26: 二段と、成り立ったときの振動 (self.trigger_haptic。ctr はそのコントローラー)。0.1.28: 二段は self.trigger_mode。"""
         n_half = hand + '.trigger_half'
         n_full = hand + '.trigger_full'
         ts = self.triggers[hand]
@@ -5901,7 +5949,7 @@ class InputLayer(object):
         was_half, was_full = ts.half_on, ts.full_on
         half_assigned = n_half in self._bind or self.trigger_test >= 2
         ts.update(value, half_assigned, n_full in self._bind or self.trigger_test >= 1, self.thresholds,
-                  self.trigger_lock)
+                  self.trigger_mode, time.time(), self.trigger_half_delay)
         if self.trigger_test and ts.zone_text() != old_zone:
             print("[TRG] {} 区間 {} → {}  (値 {:.2f})".format(hand, old_zone, ts.zone_text(), value))
         if self.trigger_haptic and ctr is not None and (
@@ -5981,7 +6029,9 @@ class InputLayer(object):
         lines.append("[Input] しきい値 半押し {:.2f} / 引き切り {:.2f} / 解除 {:.2f}、確かめ用の割り当て {}".format(
             self.thresholds[0], self.thresholds[1], self.thresholds[2], ['なし', '引き切りだけ', '半押しと引き切り'][self.trigger_test]))
         lines.append("[Input] 半押しと引き切り: {} / 振動 {}".format(
-            'ロック (先に成り立った方だけ)' if self.trigger_lock else '二段 (両方)', 'あり' if self.trigger_haptic else 'なし'))
+            {'lock': 'ロック (先に成り立った方だけ)', 'both': '二段 (両方)', 'switch': '切り替わる二段 (引き切りで半押しを離す)'}[self.trigger_mode]
+            + ('' if self.trigger_lock else '、半押しの待ち {:.2f} 秒'.format(self.trigger_half_delay)),
+            'あり' if self.trigger_haptic else 'なし'))
         lines.append("[Input] プロファイル: {} / 割り当て {} 行".format(
             self.profile_name, sum(len(v) for v in self._bind.values())))
         return lines

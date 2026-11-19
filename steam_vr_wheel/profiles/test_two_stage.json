@@ -3,12 +3,13 @@
   "format_version": 1,
   "profile": {
     "id": "test_two_stage",
-    "name": "確かめ用: 二段 (半押し = A、引き切り = 1 / 9 番も)",
-    "note": "半押しを A ボタンと同じ番号 (左 17 / 右 18) に出し、ロックを外したもの。半押しで A、そのまま引き切ると A を押したまま 1 / 9 番も出る (銃の二段トリガー)"
+    "name": "確かめ用: 二段 (半押し = A、引き切りで 1 / 9 番も足す)",
+    "note": "半押しを A ボタンと同じ番号 (左 17 / 右 18) に出し、二段 both にしたもの。半押しで A、そのまま引き切ると A を押したまま 1 / 9 番も出る。半押しは 0.15 秒とどまってから出る (その前に引き切ったら A は出ない)"
   },
   "settings": {
-    "input.trigger_lock": false,
-    "input.trigger_haptic": true
+    "input.trigger_mode": "both",
+    "input.trigger_haptic": true,
+    "input.trigger_half_delay": 0.15
   },
   "input": {
     "base": "default",

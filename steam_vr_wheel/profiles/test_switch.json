@@ -1,0 +1,33 @@
+{
+  "format": "vc-profile",
+  "format_version": 1,
+  "profile": {
+    "id": "test_switch",
+    "name": "確かめ用: 切り替わる二段 (半押し = A、引き切ると A を離して 1 / 9 番)",
+    "note": "半押しを A ボタンと同じ番号 (左 17 / 右 18) に出し、二段 switch にしたもの。半押しで A、そのまま引き切ると A を離して 1 / 9 番だけになる。半押しは 0.15 秒とどまってから出る (その前に引き切ったら A は出ない)"
+  },
+  "settings": {
+    "input.trigger_mode": "switch",
+    "input.trigger_haptic": true,
+    "input.trigger_half_delay": 0.15
+  },
+  "input": {
+    "base": "default",
+    "bindings": [
+      {
+        "input": "left.trigger_half",
+        "command": "vjoy_button",
+        "args": {
+          "button": 17
+        }
+      },
+      {
+        "input": "right.trigger_half",
+        "command": "vjoy_button",
+        "args": {
+          "button": 18
+        }
+      }
+    ]
+  }
+}
