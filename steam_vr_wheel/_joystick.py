@@ -129,6 +129,7 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     (2) HUD: トリガーを引いている間、通知の段に 'L HALF+ R ----' のような区間の段を出す (TRIGGER_HUD、段の id 'dbg_trg')。
     (3) 二段: ロックを外し、半押しと引き切りの両方を成り立たせる (TRIGGER_LOCK / 'input.trigger_lock')。
     同梱に profiles/test_two_stage.json (半押し = 17 / 18、二段) を足した。ロックありの動きは 0.1.25 と同じ。
+  0.1.27: トリガーの振動を強く (1 回のパルスを最大の 3999 に、TRIGGER_HAPTIC_PULSES = 4 回続けて出す)。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -232,7 +233,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.26'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.27'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -5733,7 +5734,10 @@ TRIGGER_FULL = 0.90                        # [CONFIG] (0.1.23) 引き切りの�
 TRIGGER_RELEASE = 0.10                     # [CONFIG] (0.1.23) 戻ったと見なす値。ロックもここで外れる (クルーズのダブルクリックのしやすさにも効く)
 TRIGGER_LOCK = True                        # [CONFIG] (0.1.26) True = ロック (先に成り立った操作だけ) / False = 二段 (上の説明)。プロファイルの 'input.trigger_lock' が優先
 TRIGGER_HAPTIC = True                      # [CONFIG] (0.1.26) 半押しが成り立ったときに震わせるか (上の説明)。プロファイルの 'input.trigger_haptic' が優先
-TRIGGER_HAPTIC_STRENGTH = 1500             # [CONFIG] (0.1.26) 震わせる長さ [マイクロ秒] (triggerHapticPulse に渡す値。最大 3999。区画の振動は 1000)
+TRIGGER_HAPTIC_STRENGTH = 3999             # [CONFIG] (0.1.26) 1 回のパルスの長さ [マイクロ秒] (triggerHapticPulse に渡す値。最大 3999。区画の振動は 1000)。
+                                           #   0.1.27: 1500 では弱すぎた (実機) ので最大に
+TRIGGER_HAPTIC_PULSES = 4                  # [CONFIG] (0.1.27) 1 回の合図で続けて出すパルスの数 (多いほど長く強く感じる)。1 = 0.1.26 と同じ短さ
+TRIGGER_HAPTIC_INTERVAL_SEC = 0.012        # [CONFIG] (0.1.27) パルスの間隔 [秒] (タイマーで出すので 60Hz のループは止めない)
 
 
 class TriggerState(object):
@@ -5902,7 +5906,7 @@ class InputLayer(object):
             print("[TRG] {} 区間 {} → {}  (値 {:.2f})".format(hand, old_zone, ts.zone_text(), value))
         if self.trigger_haptic and ctr is not None and (
                 (ts.half_on and not was_half) or (ts.full_on and not was_full and half_assigned)):
-            self.owner._haptic_pulse(ctr, TRIGGER_HAPTIC_STRENGTH)
+            self.owner._haptic_pulse(ctr, TRIGGER_HAPTIC_STRENGTH, TRIGGER_HAPTIC_PULSES, TRIGGER_HAPTIC_INTERVAL_SEC)
         self.set(n_half, ts.half_on)
         self.set(n_full, ts.full_on)
 
@@ -6405,14 +6409,24 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         except Exception as e:
             print("[Throttle] throttle_pivot.json の保存に失敗: {}".format(e))
 
-    def _haptic_pulse(self, ctr, strength):
-        """(0.1.26) 1 回だけの短い振動 (トリガーの半押しの合図)。失敗しても止めない。"""
+    def _haptic_pulse(self, ctr, strength, pulses=1, interval=0.012):
+        """(0.1.26) トリガーの半押しの合図の振動。0.1.27: pulses 回続けて出す (2 回目以降はタイマー)。失敗しても止めない。"""
         try:
-            openvr.VRSystem().triggerHapticPulse(_device_index(ctr), 0, int(max(0, min(3999, strength))))
+            idx = _device_index(ctr)
+            us = int(max(0, min(3999, strength)))
+            openvr.VRSystem().triggerHapticPulse(idx, 0, us)
+            for n in range(1, int(pulses)):
+                threading.Timer(interval * n, self._haptic_pulse_later, (idx, us)).start()
         except Exception as e:
             if not getattr(self, '_haptic_pulse_warned', False):
                 self._haptic_pulse_warned = True
                 print("[Input] Warning: トリガーの振動に失敗しました (以後は出しません): {}".format(e))
+
+    def _haptic_pulse_later(self, idx, us):
+        try:
+            openvr.VRSystem().triggerHapticPulse(idx, 0, us)
+        except Exception:
+            pass
 
     def _haptic(self, ctr, times=1):
         """振動パルス。2回目以降はタイマーで遅らせ、60Hzのループを止めない。"""
