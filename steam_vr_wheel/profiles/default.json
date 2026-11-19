@@ -10,7 +10,9 @@
     "input.trigger_half": 0.25,
     "input.trigger_full": 0.9,
     "input.trigger_release": 0.1,
-    "input.trigger_button_from": "analog"
+    "input.trigger_button_from": "analog",
+    "input.trigger_lock": true,
+    "input.trigger_haptic": true
   },
   "input": {
     "base": "none",
