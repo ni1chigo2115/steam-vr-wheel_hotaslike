@@ -1,0 +1,29 @@
+{
+  "format": "vc-profile",
+  "format_version": 1,
+  "profile": {
+    "id": "test_half_a",
+    "name": "確かめ用: 半押し = A ボタン",
+    "note": "既定の割り当てに、半押しを A ボタンと同じ番号 (左 17 / 右 18) に出す行を足したもの。半押しに割り当てがあるので、ロックで引き切り (1 / 9 番) は出ない (GEAR を選んでいる間と同じ)"
+  },
+  "settings": {},
+  "input": {
+    "base": "default",
+    "bindings": [
+      {
+        "input": "left.trigger_half",
+        "command": "vjoy_button",
+        "args": {
+          "button": 17
+        }
+      },
+      {
+        "input": "right.trigger_half",
+        "command": "vjoy_button",
+        "args": {
+          "button": 18
+        }
+      }
+    ]
+  }
+}

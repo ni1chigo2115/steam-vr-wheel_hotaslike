@@ -32,6 +32,7 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     - K / X / J : (HUD 揺れ調査用 JIT1) ずらしの入/切、絵の描き直しを絞る、調査用 CSV の記録 (下の版の説明を参照)
     - I : (入力の仮想化) 出力のバスの今の状態をコンソールに 1 回出す (コマンド 'bus_status')
     - R : (入力の仮想化) トリガーの確かめ用の仮の割り当て なし → 引き切りだけ → 半押しと引き切り (コマンド 'trigger_test')
+    - N : (入力の仮想化) profiles/ の中の次のプロファイルに切り替える (コマンド 'input_profile_next')
     - L : HUD のデバッグログを 普通 → 大きく → 隠す (コマンド 'hud_log_cycle')。ほかに 'hud_log_toggle' / 'hud_log_clear' / 'version' (キーなし)
   システム名とバージョン: APP_NAME ('SteamVR Virtual Cockpit') / APP_VERSION / APP_BASE_VERSION。
     起動時にコンソールへ表示。HUD は起動時に中央へ大きく出して消え (HUD_SPLASH_*、コマンド 'version' で出し直す)、
@@ -118,6 +119,11 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     TRIGGER_BUTTON_FROM = 'steamvr' で 0.1.23 までの出し方に戻る。軸 SL0 / SL1 と触れた 31 / 32 は今までどおり
     (どちらも割り当て経由。SL0 / SL1 はスロットル B モードを作るときに、31 / 32 は使い道が決まったときに割り当てを変える)。
     R キーの「半押しと引き切り」は、半押しに仮の割り当てを付けるので、その間はロックで 1 / 9 番が出なくなる (GEAR を選んでいる間と同じ動き)。
+  0.1.25: 入力の仮想化の段階 5。割り当てとトリガーの設定を、プロファイルの JSON (steam_vr_wheel/profiles/*.json) から読む。
+    起動時は INPUT_PROFILE_FILE を読む。N キー ('input_profile_next') で profiles/ の中の次のファイルに切り替える。
+    JSON が無い・壊れている・形が違うときは、警告を出してコードの既定値 (0.1.24 と同じ) で動く。
+    同梱: profiles/default.json (0.1.24 と同じ割り当てを全部 JSON で書いたもの) と
+    profiles/test_half_a.json (確かめ用: 半押しを A ボタンと同じ番号 (左 17 / 右 18) に出す)。形は下の「■ プロファイル JSON」。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -221,7 +227,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.24'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.25'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -636,6 +642,7 @@ HUD_POSE_THREAD_MAX_AGE_SEC = 0.02         # [CONFIG] これより古い計算�
 HUD_JITTER_CSV_DIR = None                  # [CONFIG] 調査用 CSV を置くフォルダ。None = この .py と同じフォルダ。J キーで記録の開始 / 停止
 HUD_JITTER_CSV_FLUSH_SEC = 0.5             # [CONFIG] CSV をファイルに書き出す間隔 [秒] (毎回書くと HUD の描画が遅れるため、ためてまとめて書く)
 DEBUG_KEYMAP = [                           # [CONFIG] コンソールのキー → デバッグコマンド (Joystick.debug_command の名前)。
+    ('n', 'input_profile_next'),           #   (0.1.25) 入力の仮想化: 次のプロファイルに切り替える
     ('r', 'trigger_test'),                 #   (0.1.23) 入力の仮想化: トリガーの半押し・引き切りの確かめ ([TRG] のログ)
     ('i', 'bus_status'),                   #   (0.1.19) 入力の仮想化: 出力のバスの状態を 1 回表示
     ('h', 'hud_recenter'),                 #   大文字・小文字は区別しない。コマンドの一覧は Joystick.DEBUG_COMMANDS
@@ -5595,12 +5602,79 @@ TRIGGER_BUTTON_BINDINGS = {                # (0.1.24) トリガーのボタン�
 }
 
 
-def default_input_bindings():
-    """(0.1.24) 既定の割り当て = DEFAULT_INPUT_BINDINGS + TRIGGER_BUTTON_FROM で選んだトリガーのボタン。"""
-    key = TRIGGER_BUTTON_FROM if TRIGGER_BUTTON_FROM in TRIGGER_BUTTON_BINDINGS else 'analog'
-    if key != TRIGGER_BUTTON_FROM:
-        print("[Input] Warning: TRIGGER_BUTTON_FROM = {!r} は知らない値です。'analog' にします".format(TRIGGER_BUTTON_FROM))
+def default_input_bindings(button_from=None):
+    """(0.1.24) 既定の割り当て = DEFAULT_INPUT_BINDINGS + トリガーのボタン (button_from、None なら TRIGGER_BUTTON_FROM)。"""
+    want = TRIGGER_BUTTON_FROM if button_from is None else button_from
+    key = want if want in TRIGGER_BUTTON_BINDINGS else 'analog'
+    if key != want:
+        print("[Input] Warning: トリガーのボタンの出し方 {!r} は知らない値です。'analog' にします".format(want))
     return list(TRIGGER_BUTTON_BINDINGS[key]) + list(DEFAULT_INPUT_BINDINGS)
+
+
+# ■ プロファイル JSON (0.1.25、段階 5)
+#   外側の形は非公開の作業メモ「01 の 3.3」で決めたもの (format / format_version / profile / settings / panels)。
+#   入力の割り当ては一番外側の "input" に置く (3.3 にまだ無いキー。パネルの項目の中身と一緒に決め直す予定)。
+#   {
+#     "format": "vc-profile", "format_version": 1,
+#     "profile": {"id": "default", "name": "既定", "note": ""},
+#     "settings": {"input.trigger_half": 0.25, "input.trigger_full": 0.90, "input.trigger_release": 0.10,
+#                  "input.trigger_button_from": "analog"},
+#     "input": {
+#       "base": "none",            ← "none" = 下の bindings だけ / "default" = コードの既定の割り当ての後ろに bindings を足す
+#       "bindings": [ {"input": "right.trigger_full", "command": "vjoy_button", "args": {"button": 9}}, ... ]
+#     }
+#   }
+#   - settings のキーは 04 の設定名 (input.trigger_half など)。書かないキーはコードの [CONFIG] の値になる。
+#   - 知らない format / format_version、壊れた JSON は読まない (コードの既定で動く)。知らない命令・入力の名前は警告して、その行だけ使わない / そのまま使う。
+#   - 割り当ての順 = 呼ぶ順。同じ入力に何行書いてもよい。
+INPUT_PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'profiles')   # プロファイルの置き場所
+INPUT_PROFILE_FILE = 'default.json'        # [CONFIG] (0.1.25) 起動時に読むプロファイル (INPUT_PROFILE_DIR の中のファイル名、またはフルパス)。None = 読まずにコードの既定
+
+
+def load_input_profile(path):
+    """(0.1.25) プロファイルの JSON を読み、InputLayer に渡す形 {'name', 'bindings', 'settings', 'path'} にする。
+    読めない・形が違うときは理由を print して None を返す (呼ぶ側はコードの既定で続ける)。"""
+    if not path:
+        return None
+    if not os.path.isabs(path):
+        path = os.path.join(INPUT_PROFILE_DIR, path)
+    if not os.path.exists(path):
+        print("[Input] プロファイルがありません: {}。コードの既定の割り当てで動きます".format(path))
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        print("[Input] Warning: プロファイルを読めません (JSON が壊れている?): {}: {}".format(path, e))
+        return None
+    if not isinstance(data, dict) or data.get('format') != 'vc-profile' or data.get('format_version') != 1:
+        print("[Input] Warning: 知らない形のプロファイルなので読みません (format = 'vc-profile'、format_version = 1 だけ読む): {}".format(path))
+        return None
+    prof = data.get('profile') or {}
+    name = prof.get('name') or prof.get('id') or os.path.basename(path)
+    settings = data.get('settings') or {}
+    inp = data.get('input') or {}
+    base = inp.get('base', 'default')
+    bindings = []
+    if base == 'default':
+        bindings = default_input_bindings(settings.get('input.trigger_button_from'))
+    elif base != 'none':
+        print("[Input] Warning: input.base = {!r} は知らない値です。'default' として読みます".format(base))
+        bindings = default_input_bindings(settings.get('input.trigger_button_from'))
+    for i, row in enumerate(inp.get('bindings') or []):
+        try:
+            bindings.append((str(row['input']), str(row['command']), dict(row.get('args') or {})))
+        except Exception as e:
+            print("[Input] Warning: {} の input.bindings の {} 行目を読めません: {}".format(os.path.basename(path), i + 1, e))
+    return {'name': name, 'bindings': bindings, 'settings': settings, 'path': path}
+
+
+def list_input_profiles():
+    """(0.1.25) INPUT_PROFILE_DIR の中の *.json を名前順に返す (N キーの切り替え用)。"""
+    try:
+        return sorted(n for n in os.listdir(INPUT_PROFILE_DIR) if n.lower().endswith('.json'))
+    except Exception:
+        return []
 
 # ==============================================================================
 # 入力の仮想化の層 (段階 3): トリガーの状態機械 TriggerState  (0.1.23)
@@ -5630,20 +5704,22 @@ class TriggerState(object):
         self.fired = None          # 今成り立っている操作: None / 'half' / 'full'
         self.n_fired = 0           # 操作が成り立った回数 (調べる用)
 
-    def update(self, value, half_assigned, full_assigned):
-        """value = トリガーの値 0〜1。half_assigned / full_assigned = その操作に割り当てがあるか。fired を返す。"""
+    def update(self, value, half_assigned, full_assigned, thresholds=None):
+        """value = トリガーの値 0〜1。half_assigned / full_assigned = その操作に割り当てがあるか。fired を返す。
+        thresholds = (半押し, 引き切り, 解除)。None なら TRIGGER_HALF / TRIGGER_FULL / TRIGGER_RELEASE (0.1.25: プロファイルで変えられる)。"""
+        half, full, release = thresholds if thresholds else (TRIGGER_HALF, TRIGGER_FULL, TRIGGER_RELEASE)
         v = float(value)
         self.value = v
-        if v <= TRIGGER_RELEASE:
+        if v <= release:
             self.half_zone = False
             self.full_zone = False
         else:
-            if v >= TRIGGER_HALF:
+            if v >= half:
                 self.half_zone = True
-            if v >= TRIGGER_FULL:
+            if v >= full:
                 self.full_zone = True
         if self.fired is not None:
-            if v <= TRIGGER_RELEASE:
+            if v <= release:
                 self.fired = None          # ロックを外す。新しい操作は次の更新から
             return self.fired
         if half_assigned and self.half_zone:
@@ -5669,20 +5745,62 @@ class InputLayer(object):
     """生の入力 → 名前つきの入力 → 割り当て → 命令 → バス (上の説明を参照)。owner は Joystick (config と区画の計算に使う)。"""
     COMMANDS = ['vjoy_button', 'vjoy_zone_button', 'vjoy_axis', 'vjoy_dpad']   # 命令の一覧 (中身は _cmd_<名前>)
 
-    def __init__(self, owner, bus, bindings=None):
+    def __init__(self, owner, bus, bindings=None, profile=None):
+        """bindings = 割り当ての一覧 (無ければ profile、それも無ければコードの既定)。profile = load_input_profile() の結果か None。"""
         self.owner = owner
         self.bus = bus
+        self.profile_name = profile['name'] if profile else '(コードの既定)'
+        self.profile_path = profile['path'] if profile else None
+        settings = (profile or {}).get('settings') or {}
+        self.thresholds = self._read_thresholds(settings)          # (半押し, 引き切り, 解除)
+        self.trigger_button_from = settings.get('input.trigger_button_from', TRIGGER_BUTTON_FROM)
+        if bindings is None and profile:
+            bindings = profile['bindings']
+        if bindings is None:
+            bindings = default_input_bindings(self.trigger_button_from)
         self.values = {}                  # 名前つきの入力 -> 今の値
         self._button_names = dict(RAW_BUTTON_NAMES)
         self._bind = {}                   # 入力の名前 -> [(命令, 引数), ...]
         self.n_events = 0                 # 名前つきの入力が変わった回数 (bus_status 用)
         self.triggers = {'left': TriggerState(), 'right': TriggerState()}   # 0.1.23: トリガーの状態機械
         self.trigger_test = 0             # 0.1.23: 確かめ用の仮の割り当て 0 = なし / 1 = 引き切りだけ / 2 = 半押しと引き切り
-        for name, cmd, args in (default_input_bindings() if bindings is None else bindings):
+        for name, cmd, args in bindings:
             if cmd not in self.COMMANDS:
                 print("[Input] Warning: 知らない命令 '{}' (入力 '{}')。この割り当ては使いません".format(cmd, name))
                 continue
+            if not self.known_input(name):
+                print("[Input] Warning: 知らない入力の名前 '{}' (書き間違い?)。割り当ては残しますが、届かないかもしれません".format(name))
             self._bind.setdefault(name, []).append((cmd, dict(args)))
+
+    @staticmethod
+    def _read_thresholds(settings):
+        """(0.1.25) settings からトリガーのしきい値を読む。おかしい組み合わせなら [CONFIG] の値に戻す。"""
+        try:
+            half = float(settings.get('input.trigger_half', TRIGGER_HALF))
+            full = float(settings.get('input.trigger_full', TRIGGER_FULL))
+            release = float(settings.get('input.trigger_release', TRIGGER_RELEASE))
+            if 0.0 <= release < half <= full <= 1.0:
+                return (half, full, release)
+            print("[Input] Warning: トリガーのしきい値の組み合わせがおかしいので使いません (解除 < 半押し <= 引き切り、0〜1): {} / {} / {}".format(
+                half, full, release))
+        except Exception as e:
+            print("[Input] Warning: トリガーのしきい値を読めません: {}".format(e))
+        return (TRIGGER_HALF, TRIGGER_FULL, TRIGGER_RELEASE)
+
+    def known_input(self, name):
+        """(0.1.25) 名前つきの入力として知っている名前か (書き間違いの警告用)。"""
+        hand, _, rest = name.partition('.')
+        if hand not in ('left', 'right'):
+            return False
+        known = set(n for _, n in RAW_BUTTON_NAMES)
+        known.update(['trigger_touch', 'trigger_value', 'trigger_half', 'trigger_full', 'stick_dir', 'pov_mode'])
+        return rest in known or (rest.startswith('b') and rest[1:].isdigit())
+
+    def release_all(self):
+        """(0.1.25) 押している入力を全部離す (プロファイルを切り替える前に、ボタンを押したままにしないため)。"""
+        for name in sorted(self.values.keys()):
+            if self.values[name] is True:
+                self.set(name, False)
 
     # --- 生の入力の入口 (Joystick が wheel.py のイベントと毎フレームの値から呼ぶ) ---
     def button_name(self, hand, button):
@@ -5704,7 +5822,7 @@ class InputLayer(object):
         ts = self.triggers[hand]
         old_zone = ts.zone_text()
         fired = ts.update(value, n_half in self._bind or self.trigger_test >= 2,
-                          n_full in self._bind or self.trigger_test >= 1)
+                          n_full in self._bind or self.trigger_test >= 1, self.thresholds)
         if self.trigger_test and ts.zone_text() != old_zone:
             print("[TRG] {} 区間 {} → {}  (値 {:.2f})".format(hand, old_zone, ts.zone_text(), value))
         self.set(n_half, fired == 'half')
@@ -5715,8 +5833,8 @@ class InputLayer(object):
         self.trigger_test = (self.trigger_test + 1) % 3
         text = ['なし (ログも止める)', '引き切りだけ', '半押しと引き切り'][self.trigger_test]
         print("[TRG] 確かめ用の仮の割り当て: {}  (しきい値 半押し {:.2f} / 引き切り {:.2f} / 解除 {:.2f}。仮の割り当てはゲームへ出しません)".format(
-            text, TRIGGER_HALF, TRIGGER_FULL, TRIGGER_RELEASE))
-        if self.trigger_test == 2 and TRIGGER_BUTTON_FROM == 'analog':
+            text, self.thresholds[0], self.thresholds[1], self.thresholds[2]))
+        if self.trigger_test == 2 and self.trigger_button_from == 'analog':
             print("[TRG] 注意: 半押しに仮の割り当てがある間は、ロックで引き切りのボタン (1 / 9 番) がゲームへ出ません (GEAR を選んでいる間と同じ)")
 
     # --- 名前つきの入力 ---
@@ -5770,7 +5888,9 @@ class InputLayer(object):
             lines.append("[Input] トリガー {}: 値 {:.2f} / 区間 {} / 成り立っている操作 {} (成り立った回数 {})".format(
                 hand, ts.value, ts.zone_text(), {None: 'なし', 'half': '半押し', 'full': '引き切り'}[ts.fired], ts.n_fired))
         lines.append("[Input] しきい値 半押し {:.2f} / 引き切り {:.2f} / 解除 {:.2f}、確かめ用の割り当て {}".format(
-            TRIGGER_HALF, TRIGGER_FULL, TRIGGER_RELEASE, ['なし', '引き切りだけ', '半押しと引き切り'][self.trigger_test]))
+            self.thresholds[0], self.thresholds[1], self.thresholds[2], ['なし', '引き切りだけ', '半押しと引き切り'][self.trigger_test]))
+        lines.append("[Input] プロファイル: {} / 割り当て {} 行".format(
+            self.profile_name, sum(len(v) for v in self._bind.values())))
         return lines
 
 
@@ -5886,7 +6006,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         if not INPUT_BINDINGS_ENABLED or self.bus is None:
             return
         try:
-            self.inputs = InputLayer(self, self.bus)
+            self.inputs = InputLayer(self, self.bus, profile=load_input_profile(INPUT_PROFILE_FILE))
             # 割り当ての既定値が _virtualpad.py の BUTTONS と食い違っていないか (どちらかを直したとき用)
             try:
                 from steam_vr_wheel._virtualpad import BUTTONS as _vp_buttons
@@ -5894,7 +6014,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                     for button, b_id in _vp_buttons[hand].items():
                         want = 'vjoy_zone_button' if b_id in (-1, -2) else 'vjoy_button'
                         in_name = self.inputs.button_name(hand, button)
-                        if button == openvr.k_EButton_SteamVR_Trigger and TRIGGER_BUTTON_FROM == 'analog':
+                        if button == openvr.k_EButton_SteamVR_Trigger and self.inputs.trigger_button_from == 'analog':
                             in_name = hand + '.trigger_full'      # 0.1.24: トリガーのボタンはアナログの引き切りから
                         got = self.inputs._bind.get(in_name, [])
                         ok = any(c == want and (want != 'vjoy_button' or a.get('button') == b_id) for c, a in got)
@@ -5905,12 +6025,40 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 print("[Input] Warning: BUTTONS との照合をできません: {}".format(e))
             if self.trackpad_left_enabled or self.trackpad_right_enabled:
                 print("[Input] Warning: スティックの軸の出力 (trackpad_*_enabled) は InputLayer にまだ無いので出ません")
-            print("[Input] 生の入力を InputLayer 経由にしました (INPUT_BINDINGS_ENABLED)。トリガーのボタン: {}".format(
-                'アナログの引き切り ({:.2f} で押す / {:.2f} で離す)'.format(TRIGGER_FULL, TRIGGER_RELEASE)
-                if TRIGGER_BUTTON_FROM != 'steamvr' else 'SteamVR の「押した」 (TRIGGER_BUTTON_FROM)'))
+            self._print_input_layer()
         except Exception as e:
             self.inputs = None
             print("[Input] Warning: InputLayer を作れません。0.1.20 の道で続けます: {}".format(e))
+
+    def _print_input_layer(self):
+        inp = self.inputs
+        print("[Input] 生の入力を InputLayer 経由にしました (INPUT_BINDINGS_ENABLED)。プロファイル: {}。トリガーのボタン: {}".format(
+            inp.profile_name,
+            'アナログの引き切り ({:.2f} で押す / {:.2f} で離す)'.format(inp.thresholds[1], inp.thresholds[2])
+            if inp.trigger_button_from != 'steamvr' else 'SteamVR の「押した」'))
+
+    def input_profile_next(self):
+        """(0.1.25) コマンド 'input_profile_next': profiles/ の中の次のプロファイルに切り替える。
+        押しているボタンを全部離してから、新しい InputLayer を作る (トリガーのロックなどの状態は始めから)。"""
+        if self.inputs is None:
+            print("[Input] InputLayer を使っていないので切り替えられません (INPUT_BINDINGS_ENABLED = False)")
+            return
+        names = list_input_profiles()
+        if not names:
+            print("[Input] {} にプロファイルがありません".format(INPUT_PROFILE_DIR))
+            return
+        cur = os.path.basename(self.inputs.profile_path) if self.inputs.profile_path else None
+        nxt = names[(names.index(cur) + 1) % len(names)] if cur in names else names[0]
+        prof = load_input_profile(nxt)
+        if prof is None:
+            print("[Input] {} を読めなかったので、今のプロファイルのままにします".format(nxt))
+            return
+        old = self.inputs
+        old.release_all()
+        self.inputs = InputLayer(self, self.bus, profile=prof)
+        self.inputs.trigger_test = old.trigger_test
+        print("[Input] プロファイルを切り替えました: {} ({})".format(prof['name'], nxt))
+        self._print_input_layer()
 
     def _input_frame(self, left_ctr, right_ctr):
         """毎フレームの生の入力。InputLayer があればそこへ、無ければ 0.1.20 まで (VirtualPad.update が vJoy へ書く)。"""
@@ -6199,6 +6347,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ('hud_log_toggle', "HUD のデバッグログを隠す / 出す (出すときは隠す前の大きさ)"),
         ('hud_log_clear', "HUD のデバッグログを消す (コンソールの表示はそのまま)"),
         ('version', "システム名とバージョンを表示する (コンソール + HUD の中央に大きく)"),
+        ('input_profile_next', "入力の仮想化: profiles/ の中の次のプロファイル (割り当てとトリガーの設定) に切り替える"),
         ('trigger_test', "入力の仮想化: トリガーの確かめ用の仮の割り当てを なし → 引き切りだけ → 半押しと引き切り の順に (ゲームへは出さない。[TRG] のログ)"),
         ('bus_status', "入力の仮想化: 出力のバス (InputBus) と InputLayer の今の状態を 1 回表示する (押下中のボタンと経路、軸、POV、書き込み回数、押している入力)"),
         ('dpad_debug', "Q29-3 調査用: スティックと VirtualDPad の数値の段を出す / 隠す"),
@@ -6282,6 +6431,8 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         elif name in ('hud_center_down', 'hud_center_up'):
             if hud is not None and hasattr(hud, 'nudge_center'):
                 hud.nudge_center(float(HUD_CENTER_NUDGE_M) * (1.0 if name == 'hud_center_up' else -1.0))
+        elif name == 'input_profile_next':
+            self.input_profile_next()
         elif name == 'trigger_test':
             if self.inputs is None:
                 print("[TRG] InputLayer を使っていないので確かめられません (INPUT_BINDINGS_ENABLED = False)")
