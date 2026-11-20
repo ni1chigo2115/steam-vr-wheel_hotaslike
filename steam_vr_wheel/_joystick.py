@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.29'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.30'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -5865,6 +5865,22 @@ def build_panel_states(profile):
     if defs.get('right_game'):
         out['right_game'] = PanelState('right_game', defs['right_game'])
     return out
+
+
+PANEL_STICK_DEADZONE = 0.6   # [CONFIG] (0.1.30) 倒した量 (0〜1) がこれ未満なら、選びを変えない (選んだ項目は残る)
+
+
+def panel_slot_from_stick(x, y, n, deadzone=None):
+    """(0.1.30) スティックの (x, y) (右 +、上 +) から選ぶスロット '1'〜'n' を返す。
+    項目 1 が真上、時計回りに 360/n の扇形 (01 の Q19)。倒し量が deadzone 未満なら None (選びを変えない)。"""
+    if deadzone is None:
+        deadzone = PANEL_STICK_DEADZONE
+    if n < 1 or math.hypot(x, y) < deadzone:
+        return None
+    sector = 360.0 / n
+    ang = math.degrees(math.atan2(x, y)) % 360.0            # 真上 = 0、時計回り
+    idx = int(((ang + sector / 2.0) % 360.0) // sector)      # 項目 1 の扇形を真上に中心づける
+    return str(idx + 1)
 
 
 # ==============================================================================
