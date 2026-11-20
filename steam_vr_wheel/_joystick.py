@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.30'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.31'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -563,11 +563,26 @@ def hud_row_trigger():
             'parts': [{'text_fn': hud_text_trigger, 'reserve': 'L HALF+ R HALF+', 'align': 'left'}]}
 
 
+# --- (0.1.31) パネルの段: 左右のパネルの今の階層と選んでいるスロットを出す (パネルのデバッグ用) -----------
+PANEL_HUD = True                           # [CONFIG] (0.1.31) パネルが定義されているとき、パネルの段を出す
+
+
+def hud_text_panel(v):
+    p = v.get('pnl') or {}
+    return 'L {}   R {}'.format(p.get('L', '-'), p.get('R', '-'))
+
+
+def hud_row_panel():
+    """(0.1.31) パネルの段。'sig:panel' (プロファイルに panels がある) の間だけ出す。"""
+    return {'id': 'dbg_pnl', 'on': ['sig:panel'],
+            'parts': [{'text_fn': hud_text_panel, 'reserve': 'L main>cruise sel 8   R main sel 8', 'align': 'left'}]}
+
+
 HUD_FONT_TEST = True                       # [CONFIG] フォント確認用の段を出す (確認が終わったら False)
 HUD_NOTICE_ROWS = [                        # [CONFIG] 上から並べる順番
     hud_row_bmark(),
     hud_row_cruise(),
-] + ([hud_row_clock()] if HUD_CLOCK_ENABLED else []) + ([hud_row_trigger()] if TRIGGER_HUD else []) + hud_rows_dpad_debug() + (hud_rows_font_test() if HUD_FONT_TEST else [])   # 数値の段をアイコンの段より上に (DPAD2)
+] + ([hud_row_clock()] if HUD_CLOCK_ENABLED else []) + ([hud_row_trigger()] if TRIGGER_HUD else []) + ([hud_row_panel()] if PANEL_HUD else []) + hud_rows_dpad_debug() + (hud_rows_font_test() if HUD_FONT_TEST else [])   # 数値の段をアイコンの段より上に (DPAD2)
 
 # --- 半透明の薄板 (HUD表示部分だけの裏に敷く。ゲーム画面は隠さない) -----------------------
 HUD_PANEL_ENABLED = True                   # [CONFIG] 薄板を付けるか
@@ -6132,6 +6147,16 @@ class InputLayer(object):
         self.set(n_half, ts.half_on)
         self.set(n_full, ts.full_on)
 
+    def panel_hud_values(self):
+        """(0.1.31) HUD の段用: 左右のパネルの今の階層と選んでいるスロット。panels が無ければ None。"""
+        if not self.panels:
+            return None
+        out = {}
+        for side, mark in (('left_game', 'L'), ('right_game', 'R')):
+            ps = self.panels.get(side)
+            out[mark] = '-' if ps is None else '{} sel {}'.format('>'.join(ps.stack), ps.selected or '-')
+        return out
+
     def trigger_hud_values(self):
         """(0.1.26) HUD の区間の段に渡す値 {'left': (区間, 操作), 'right': ...} と、段を出すか。"""
         out = {}
@@ -6994,6 +7019,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             else:
                 trg_values, trg_active = None, False
             hud_roll = (ax - 0.5) * 2.0
+            pnl_values = self.inputs.panel_hud_values() if (self.inputs is not None and PANEL_HUD) else None   # 0.1.31
             hud_yaw = (az - 0.5) * 2.0
             if self.hud_swap_yaw_roll:
                 hud_yaw, hud_roll = hud_roll, hud_yaw
@@ -7010,11 +7036,12 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                          'sig:throttle_grab': self.throttle_z.throttle_grabbed,
                          'sig:cruise': bool(CRUISE_MODE_ENABLED),
                          'sig:dpad_debug': self.dpad_debug_hud,
-                         'sig:trigger_zone': trg_active},
+                         'sig:trigger_zone': trg_active,
+                         'sig:panel': pnl_values is not None},
                 buttons=self._vbtn_state,
                 values={'throttle': self.throttle_z.x,
                         'cruise_power': CRUISE_MODE_Power if CRUISE_MODE_Power is not None else self.throttle_z.x,
                         'cruise_center': self.cruise_center,
                         'dbg': self._dpad_debug_values(left_ctr, right_ctr) if self.dpad_debug_hud else None,
-                        'trg': trg_values}
+                        'trg': trg_values, 'pnl': pnl_values}
             )
