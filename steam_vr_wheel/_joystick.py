@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.28'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.29'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -5703,7 +5703,8 @@ def load_input_profile(path):
             bindings.append((str(row['input']), str(row['command']), dict(row.get('args') or {})))
         except Exception as e:
             print("[Input] Warning: {} の input.bindings の {} 行目を読めません: {}".format(os.path.basename(path), i + 1, e))
-    return {'name': name, 'bindings': bindings, 'settings': settings, 'path': path}
+    return {'name': name, 'bindings': bindings, 'settings': settings, 'path': path,
+            'panels': read_panel_definitions(data.get('panels'))}   # 0.1.29
 
 
 def list_input_profiles():
@@ -5712,6 +5713,159 @@ def list_input_profiles():
         return sorted(n for n in os.listdir(INPUT_PROFILE_DIR) if n.lower().endswith('.json'))
     except Exception:
         return []
+
+# ==============================================================================
+# パネルの定義の読み込みと今の階層 PanelState  (0.1.29、段階 1: 画面にはまだ出さない)
+# ==============================================================================
+# ■ 決まり (正本は非公開の作業メモの「01 の 3.1〜3.3」。ここはそれをコードにしたもの)
+#   - プロファイルの "panels": {"left_game": {"root", "folders"}, "right_game": {"items"}}。どちらも無くてもよい。
+#   - スロットのキーは文字列 "1"〜"8"。"0" は中央 (何もしない) なので、書かれていたら警告して捨てる。
+#   - 下の階層 (ルート以外のフォルダ) の "1" は「戻る」の予約。書かれていたら警告して捨てる。
+#     下の階層の "8" は「次へ」(3.2)。段階 1 では名前 ('next') を返すだけで、次の階層は作らない。
+#   - 右パネルには階層が無い。フォルダを書いたら警告して捨て、項目は "items" の 1 つの表だけ。
+#   - "folder" は、そのスロットを実行したときに入るフォルダの名前。無い名前・循環は警告して、その行を捨てる。
+#   - PanelState が持つのは、今いる階層の道 (stack) と選んでいるスロット (selected) だけ。
+#     プロファイルを切り替えると InputLayer ごと作り直すので、階層はルートから始まる (3.3)。
+PANEL_SLOTS = ('1', '2', '3', '4', '5', '6', '7', '8')
+PANEL_BACK_SLOT = '1'     # 下の階層で「戻る」
+PANEL_NEXT_SLOT = '8'     # 下の階層で「次へ」(段階 1 は名前だけ)
+
+
+def _check_panel_folders(root, folders):
+    """(0.1.29) ルートから届く 'folder' を調べる。指す先が無い行、フォルダの循環は警告して捨てる。ルートが無ければ空で作る。"""
+    if root not in folders:
+        folders[root] = {}
+
+    def visit(name, path):
+        for slot in list(folders.get(name, {}).keys()):
+            target = folders[name][slot].get('folder')
+            if target is None:
+                continue
+            target = str(target)
+            if target not in folders:
+                print("[Panel] Warning: フォルダ '{}' の '{}' が指す '{}' がありません。この行は捨てます".format(name, slot, target))
+                del folders[name][slot]
+            elif target in path:
+                print("[Panel] Warning: フォルダ '{}' の '{}' が循環しています ('{}')。この行は捨てます".format(name, slot, target))
+                del folders[name][slot]
+            else:
+                visit(target, path + [target])
+
+    visit(root, [root])
+
+
+def _read_panel_side(side, is_left):
+    """(0.1.29) 左 (folders あり) か右 (items だけ) の一方を読み、{'root', 'folders'} にする。形が違えば None。"""
+    if not isinstance(side, dict):
+        print("[Panel] Warning: パネルの中身は {} の形で書いてください。このパネルは無しで続けます")
+        return None
+    if is_left:
+        root = str(side.get('root', 'main'))
+        raw_folders = side.get('folders') or {}
+    else:
+        root = 'main'
+        if 'folders' in side:
+            print("[Panel] Warning: right_game にフォルダは書けません。'folders' を捨てます")
+        raw_folders = {root: side.get('items') or {}}
+    if not isinstance(raw_folders, dict):
+        print("[Panel] Warning: folders は {フォルダ名: {スロット: 項目}} の形で書いてください。このパネルは無しで続けます")
+        return None
+    folders = {}
+    for fname, table in raw_folders.items():
+        fname = str(fname)
+        if not isinstance(table, dict):
+            print("[Panel] Warning: フォルダ '{}' は {スロット: 項目} の形で書いてください。このフォルダは捨てます".format(fname))
+            continue
+        rows = {}
+        for slot, row in table.items():
+            slot = str(slot)
+            if slot not in PANEL_SLOTS:
+                print("[Panel] Warning: フォルダ '{}' のスロット '{}' は使えません (1〜8 だけ)。捨てます".format(fname, slot))
+                continue
+            if fname != root and slot == PANEL_BACK_SLOT:
+                print("[Panel] Warning: 下の階層の '1' は「戻る」の予約なので書けません (フォルダ '{}')。捨てます".format(fname))
+                continue
+            if not isinstance(row, dict):
+                print("[Panel] Warning: フォルダ '{}' のスロット '{}' の項目は {} の形で書いてください。捨てます".format(fname, slot))
+                continue
+            if not is_left and 'folder' in row:
+                print("[Panel] Warning: 右パネルの項目にフォルダは書けません (スロット '{}')。'folder' を捨てます".format(slot))
+                row = dict((k, v) for k, v in row.items() if k != 'folder')
+            rows[slot] = row
+        folders[fname] = rows
+    _check_panel_folders(root, folders)
+    return {'root': root, 'folders': folders}
+
+
+def read_panel_definitions(raw):
+    """(0.1.29) プロファイルの "panels" を読む。返り値 = {'left_game': 定義 か None, 'right_game': 定義 か None}。
+    'panels' が無ければ None (パネル無しで続ける)。形が違えば警告して None。"""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        print("[Panel] Warning: panels は {'left_game': ..., 'right_game': ...} の形で書いてください。パネルは無しで続けます")
+        return None
+    left = _read_panel_side(raw['left_game'], True) if 'left_game' in raw else None
+    right = _read_panel_side(raw['right_game'], False) if 'right_game' in raw else None
+    return {'left_game': left, 'right_game': right}
+
+
+class PanelState(object):
+    """(0.1.29) 1 枚のパネルの今の階層 (stack) と選んでいるスロット (selected)。画面にはまだ出さない (段階 1)。
+    execute() は選んでいるスロットを実行した結果を (動き, 中身) で返す:
+      ('none', None)    何もしない (スロット 0、空き、選んでいない)
+      ('item', 項目)    項目を実行する (中身は JSON の項目の dict)
+      ('enter', 名前)   フォルダに入った (stack を進めた)
+      ('back', None)    1 つ上の階層へ戻った (stack を戻した)
+      ('next', None)    「次へ」(段階 1 は名前だけ。階層は変えない)
+    """
+
+    def __init__(self, side_name, defs):
+        self.side_name = side_name
+        self.root = defs['root']
+        self.folders = defs['folders']
+        self.stack = [self.root]        # 今いる階層の道 (先頭 = ルート)
+        self.selected = None            # 選んでいるスロット (文字列)、無ければ None
+
+    def table(self):
+        return self.folders.get(self.stack[-1], {})
+
+    def select(self, slot):
+        """スロットを選ぶ。'0' と知らないスロットは、選んでいない扱いにする。"""
+        slot = str(slot)
+        self.selected = slot if slot in PANEL_SLOTS else None
+        return self.selected
+
+    def execute(self):
+        slot = self.selected
+        if slot is None:
+            return ('none', None)
+        if len(self.stack) > 1:                       # 下の階層
+            if slot == PANEL_BACK_SLOT:
+                self.stack.pop()
+                return ('back', None)
+            if slot == PANEL_NEXT_SLOT:
+                return ('next', None)
+        row = self.table().get(slot)
+        if row is None:
+            return ('none', None)
+        target = row.get('folder')
+        if target is not None:
+            self.stack.append(str(target))
+            return ('enter', str(target))
+        return ('item', row)
+
+
+def build_panel_states(profile):
+    """(0.1.29) プロファイルの panels から {'left_game': PanelState, 'right_game': PanelState} を作る。無ければ空の dict。"""
+    defs = (profile or {}).get('panels') or {}
+    out = {}
+    if defs.get('left_game'):
+        out['left_game'] = PanelState('left_game', defs['left_game'])
+    if defs.get('right_game'):
+        out['right_game'] = PanelState('right_game', defs['right_game'])
+    return out
+
 
 # ==============================================================================
 # 入力の仮想化の層 (段階 3): トリガーの状態機械 TriggerState  (0.1.23)
@@ -5869,6 +6023,10 @@ class InputLayer(object):
             print("[Input] Warning: 'input.trigger_half_delay' を読めません。{} を使います".format(TRIGGER_HALF_DELAY_SEC))
             self.trigger_half_delay = TRIGGER_HALF_DELAY_SEC
         self.trigger_haptic = self._read_bool(settings, 'input.trigger_haptic', TRIGGER_HAPTIC)  # 0.1.26
+        self.panels = build_panel_states(profile)   # 0.1.29: 左右のパネルの今の階層 (画面にはまだ出さない)
+        for side_name in sorted(self.panels.keys()):
+            ps = self.panels[side_name]
+            print("[Panel] {}: ルート '{}'、フォルダ {}".format(side_name, ps.root, ', '.join(sorted(ps.folders.keys()))))
         if bindings is None and profile:
             bindings = profile['bindings']
         if bindings is None:

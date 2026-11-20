@@ -1,0 +1,37 @@
+{
+  "format": "vc-profile",
+  "format_version": 1,
+  "profile": {
+    "id": "test_panels",
+    "name": "テスト: パネルの階層 (段階 1、画面には出ません)",
+    "note": "割り当ては既定と同じ。panels を読むかだけを確かめる。左 GAME はフォルダ cruise に入れる"
+  },
+  "settings": {},
+  "input": {
+    "base": "default",
+    "bindings": []
+  },
+  "panels": {
+    "left_game": {
+      "root": "main",
+      "folders": {
+        "main": {
+          "1": {"label": "MISSILE"},
+          "5": {"label": "CRUISE", "folder": "cruise"},
+          "0": {"label": "無効 (警告して捨てる)"}
+        },
+        "cruise": {
+          "1": {"label": "この行は予約なので捨てる"},
+          "2": {"label": "CRUISE ON"},
+          "8": {"label": "次へ"}
+        }
+      }
+    },
+    "right_game": {
+      "items": {
+        "1": {"label": "MISSILE", "button": 9},
+        "5": {"label": "GEAR", "trigger_mode": "select"}
+      }
+    }
+  }
+}
