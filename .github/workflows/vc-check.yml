@@ -1,0 +1,34 @@
+# VC の PR の自動確認 (公開フォーク steam-vr-wheel_hotaslike の .github/workflows/ に置く)
+#
+# 置き方: このファイルを フォークの .github/workflows/vc-check.yml に、
+#         check_joystick.py を フォークの tools/check_joystick.py にコピーする。
+# 中身: 3.5 で使えない文法、CRLF、APP_VERSION の上げ忘れを見る (02 の 3・4 章)。
+# 実機の確かめ・テストキットの実行は含まない (人が行う。02 の 5 章)。
+name: vc-check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR の中身を取る
+        uses: actions/checkout@v4
+        with:
+          path: head
+
+      - name: 元 (base) のブランチを取る
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: _joystick.py を確かめる
+        run: |
+          python3 head/tools/check_joystick.py \
+            head/steam_vr_wheel/_joystick.py \
+            base/steam_vr_wheel/_joystick.py
