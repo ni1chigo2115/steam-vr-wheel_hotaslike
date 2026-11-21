@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.33'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.34'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -5890,6 +5890,8 @@ def build_panel_states(profile):
 
 
 PANEL_STICK_DEADZONE = 0.6   # [CONFIG] (0.1.30) 倒した量 (0〜1) がこれ未満なら、選びを変えない (選んだ項目は残る)
+PANEL_PRESS_SEC = 0.10       # [CONFIG] (0.1.34) パネルの項目でボタンを出すとき、押している時間 [秒]
+PANEL_ITEM_COMMANDS = ('vjoy_button',)   # (0.1.34) パネルの項目に書ける命令 (項目の中身は作りながら増やす)
 
 
 def panel_slot_from_stick(x, y, n, deadzone=None):
@@ -6160,6 +6162,7 @@ class InputLayer(object):
         (0.1.33) 右パネルは right_enabled (十字キーモードでない) のときだけ動く (01 の 3.1)。
         右の項目で exec が 'trigger' でないもの (既定 'tilt') は、倒した時点で実行する。
         一度中央 (遊びの中) に戻してから同じ向きに倒すと、同じ項目をもう一度実行する。"""
+        self._panel_release_due()                    # 0.1.34
         if not self.panels:
             return
         if not hasattr(self, '_panel_stick_out'):
@@ -6205,6 +6208,44 @@ class InputLayer(object):
                 return True
         return False
 
+    def _panel_item_press(self, side, slot, row):
+        """(0.1.34) 項目の 'command' と 'args' (割り当てと同じ書き方) を呼ぶ。押して、PANEL_PRESS_SEC 後に離す。
+        命令が無い項目は行に出すだけ。書ける命令は PANEL_ITEM_COMMANDS だけ。"""
+        cmd = row.get('command')
+        if cmd is None:
+            return
+        if cmd not in PANEL_ITEM_COMMANDS:
+            print("[Panel] Warning: パネルの項目に書ける命令は {} だけです ({} の {}: {!r})".format(
+                ', '.join(PANEL_ITEM_COMMANDS), side, slot, cmd))
+            return
+        args = dict(row.get('args') or {})
+        name = 'panel.{}.{}'.format(side, slot)
+        try:
+            getattr(self, '_cmd_' + cmd)(name, True, args)
+        except Exception as e:
+            print("[Panel] Warning: {} の {} を実行できません: {}".format(side, slot, e))
+            return
+        if not hasattr(self, '_panel_releases'):
+            self._panel_releases = []
+        self._panel_releases.append((time.time() + PANEL_PRESS_SEC, cmd, name, args))
+
+    def _panel_release_due(self):
+        """(0.1.34) 押す時間が過ぎた項目のボタンを離す (毎フレーム、update_panel_selection から)。"""
+        rel = getattr(self, '_panel_releases', None)
+        if not rel:
+            return
+        now = time.time()
+        keep = []
+        for due, cmd, name, args in rel:
+            if now < due:
+                keep.append((due, cmd, name, args))
+                continue
+            try:
+                getattr(self, '_cmd_' + cmd)(name, False, args)
+            except Exception as e:
+                print("[Panel] Warning: {} を離せません: {}".format(name, e))
+        self._panel_releases = keep
+
     def _panel_run(self, side, how):
         """(0.1.33) パネルで選んでいる項目を実行して、結果を [Panel] の行に出す。how = 'trigger' / 'tilt'。
         項目の中身 (ゲームへ何を出すか) はまだ決めていないので、段階 2 では行に出すだけ。"""
@@ -6213,6 +6254,7 @@ class InputLayer(object):
         kind, what = ps.execute()
         if kind == 'item':
             print("[Panel] {}: 実行 {} {} ({})".format(side, slot, what.get('label', what), how))
+            self._panel_item_press(side, slot, what)
         elif kind == 'enter':
             print("[Panel] {}: {} でフォルダ '{}' に入る".format(side, slot, what))
         elif kind == 'back':
@@ -6298,8 +6340,11 @@ class InputLayer(object):
     def _cmd_vjoy_dpad(self, name, value, args):
         if 'right.stick_dir' not in self.values or 'left.pov_mode' not in self.values:
             return
-        self.owner._dpad_output(bool(self.values['left.pov_mode']), self.values['right.stick_dir'],
-                                'in:right.stick_dir', args.get('buttons'), args.get('pov', 1))
+        pov = bool(self.values['left.pov_mode'])
+        direction = self.values['right.stick_dir']
+        if not pov and 'right_game' in (self.panels or {}):
+            direction = 5     # 0.1.34: 右パネルがある間、十字キーモードでないときのボタンは出さない (パネルの項目が代わり)
+        self.owner._dpad_output(pov, direction, 'in:right.stick_dir', args.get('buttons'), args.get('pov', 1))
 
     def status_lines(self):
         on = sorted(k for k, v in self.values.items() if v is True)

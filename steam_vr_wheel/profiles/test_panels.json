@@ -4,7 +4,7 @@
   "profile": {
     "id": "test_panels",
     "name": "テスト: パネルの階層 (段階 1、画面には出ません)",
-    "note": "割り当ては既定に、左右の半押し = パネルの実行を足したもの。左はトリガーで実行。右は倒した時点で実行、GEAR (5) だけ右トリガーで実行。警告 2 行はわざと"
+    "note": "割り当ては既定に、左右の半押し = パネルの実行を足したもの。左はトリガーで実行。右は倒した時点で実行、GEAR (5) だけ右トリガーで実行。項目のボタンは 19〜22 (確かめ用)。警告 2 行はわざと"
   },
   "settings": {},
   "input": {
@@ -19,21 +19,21 @@
       "root": "main",
       "folders": {
         "main": {
-          "1": {"label": "MISSILE"},
+          "1": {"label": "MISSILE", "command": "vjoy_button", "args": {"button": 20}},
           "5": {"label": "CRUISE", "folder": "cruise"},
           "0": {"label": "無効 (警告して捨てる)"}
         },
         "cruise": {
           "1": {"label": "この行は予約なので捨てる"},
-          "2": {"label": "CRUISE ON"},
+          "2": {"label": "CRUISE ON", "command": "vjoy_button", "args": {"button": 21}},
           "8": {"label": "次へ"}
         }
       }
     },
     "right_game": {
       "items": {
-        "1": {"label": "MISSILE", "button": 9},
-        "5": {"label": "GEAR", "exec": "trigger"}
+        "1": {"label": "MISSILE", "command": "vjoy_button", "args": {"button": 19}},
+        "5": {"label": "GEAR", "exec": "trigger", "command": "vjoy_button", "args": {"button": 22}}
       }
     }
   }
