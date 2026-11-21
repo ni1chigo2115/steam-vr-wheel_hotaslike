@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.37'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.38'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -5750,6 +5750,8 @@ def default_input_bindings(button_from=None):
 #   - settings のキーは 04 の設定名 (input.trigger_half など)。書かないキーはコードの [CONFIG] の値になる。
 #   - 知らない format / format_version、壊れた JSON は読まない (コードの既定で動く)。知らない命令・入力の名前は警告して、その行だけ使わない / そのまま使う。
 #   - 割り当ての順 = 呼ぶ順。同じ入力に何行書いてもよい。
+#   - (0.1.38) "input": {"unbind": ["left.trigger_value", ...]} = その入力の割り当てを全部外す (既定の割り当ても)。
+#     入力そのものは名前つきの入力として残る (仮想化したまま、ゲームへの元の出力だけを止める)。
 INPUT_PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'profiles')   # プロファイルの置き場所
 INPUT_PROFILE_FILE = 'default.json'        # [CONFIG] (0.1.25) 起動時に読むプロファイル (INPUT_PROFILE_DIR の中のファイル名、またはフルパス)。None = 読まずにコードの既定
 
@@ -5789,6 +5791,13 @@ def load_input_profile(path):
             bindings.append((str(row['input']), str(row['command']), dict(row.get('args') or {})))
         except Exception as e:
             print("[Input] Warning: {} の input.bindings の {} 行目を読めません: {}".format(os.path.basename(path), i + 1, e))
+    unbind = inp.get('unbind') or []                     # 0.1.38
+    if unbind:
+        drop = set(str(n) for n in unbind)
+        before = len(bindings)
+        bindings = [b for b in bindings if b[0] not in drop]
+        print("[Input] {}: input.unbind で {} 行の割り当てを外しました ({})".format(
+            os.path.basename(path), before - len(bindings), ', '.join(sorted(drop))))
     return {'name': name, 'bindings': bindings, 'settings': settings, 'path': path,
             'panels': read_panel_definitions(data.get('panels'))}   # 0.1.29
 

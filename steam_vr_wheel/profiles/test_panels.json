@@ -4,11 +4,12 @@
   "profile": {
     "id": "test_panels",
     "name": "テスト: パネル (01 の既定の並び)",
-    "note": "左は 01 の 3.2 の動作テスト用の並び、右は 3.1 の AC8 風の一例。ボタンは確かめ用の仮の番号 (19〜23)。MNVR は 1 ボタンの仮 (同時押しは args の buttons に番号を並べる)。ボタンの無い項目はコンソールに出るだけ。警告 2 行 ('0' と cruise の '1') はわざと"
+    "note": "左は 01 の 3.2 の動作テスト用の並び、右は 3.1 の AC8 風の一例。ボタンは確かめ用の仮の番号 (19〜23)。左トリガーはパネルの実行だけ (元の軸 SL0・ボタン 1・触れた 31 は unbind で止める)。MNVR は 1 ボタンの仮 (同時押しは args の buttons に番号を並べる)。ボタンの無い項目はコンソールに出るだけ。警告 2 行 ('0' と cruise の '1') はわざと"
   },
   "settings": {},
   "input": {
     "base": "default",
+    "unbind": ["left.trigger_value", "left.trigger_full", "left.trigger_touch"],
     "bindings": [
       {"input": "left.trigger_half", "command": "panel_execute", "args": {"panel": "left_game"}},
       {"input": "right.trigger_half", "command": "panel_execute", "args": {"panel": "right_game"}}
