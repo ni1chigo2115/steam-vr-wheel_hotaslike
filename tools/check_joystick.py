@@ -13,7 +13,8 @@ VC の _joystick.py の機械チェック (PR の自動確認用)
        - := (セイウチ演算子)
        - 数値の桁区切り 1_000
   2. ファイルが CRLF か (LF の行が混ざっていないか)
-  3. APP_VERSION が上がっているか (元のファイルを渡したときだけ)
+  3. APP_VERSION が上がっているか (元のファイルを渡したときだけ。
+     _joystick.py 自体が変わっていないときは見ない)
 
 終了コード: 問題なし 0 / 問題あり 1 / 読めない 2
 本体の動きは見ない。実機の確かめは人が行う (02 の 5 章)。
@@ -116,9 +117,13 @@ def main(argv):
             print('読めない: %s (%s)' % (base_path, e))
             return 2
         base_ver = app_version(base_raw)
-        if new_ver is not None and new_ver == base_ver:
+        if new_raw == base_raw:
+            # コードを変えない PR (CI や文書だけの変更) では上げ忘れを見ない
+            print('_joystick.py は変更なし (APP_VERSION は見ない): %s' % new_ver)
+        elif new_ver is not None and new_ver == base_ver:
             problem('APP_VERSION が上がっていない (%s のまま)' % new_ver)
-        print('APP_VERSION: %s -> %s' % (base_ver, new_ver))
+        if new_raw != base_raw:
+            print('APP_VERSION: %s -> %s' % (base_ver, new_ver))
     else:
         print('APP_VERSION: %s (元のファイルがないので上がったかは見ない)' % new_ver)
 
