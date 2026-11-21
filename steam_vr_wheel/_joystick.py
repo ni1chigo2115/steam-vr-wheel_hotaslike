@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.31'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.32'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -5845,6 +5845,11 @@ class PanelState(object):
     def table(self):
         return self.folders.get(self.stack[-1], {})
 
+    def slot_count(self):
+        """(0.1.32) 今の階層の項目の数 (扇形の数 n)。今の階層で一番大きいスロットの番号。空の階層は 1。"""
+        keys = [int(s) for s in self.table().keys()]
+        return max(keys) if keys else 1
+
     def select(self, slot):
         """スロットを選ぶ。'0' と知らないスロットは、選んでいない扱いにする。"""
         slot = str(slot)
@@ -6146,6 +6151,21 @@ class InputLayer(object):
             self.owner._haptic_pulse(ctr, TRIGGER_HAPTIC_STRENGTH, TRIGGER_HAPTIC_PULSES, TRIGGER_HAPTIC_INTERVAL_SEC)
         self.set(n_half, ts.half_on)
         self.set(n_full, ts.full_on)
+
+    def update_panel_selection(self, lx, ly, rx, ry):
+        """(0.1.32) 左右のスティックの倒し方で、各パネルの選ぶスロットを決める (実行はまだしない)。
+        倒し量が足りなければ選びを変えない (選んだ項目は残る)。変わったときだけ [Panel] の行を出す。"""
+        if not self.panels:
+            return
+        for side, x, y in (('left_game', lx, ly), ('right_game', rx, ry)):
+            ps = self.panels.get(side)
+            if ps is None:
+                continue
+            slot = panel_slot_from_stick(x, y, ps.slot_count())
+            if slot is None or slot == ps.selected:
+                continue
+            ps.select(slot)
+            print("[Panel] {}: 選ぶ {}".format(side, slot))
 
     def panel_hud_values(self):
         """(0.1.31) HUD の段用: 左右のパネルの今の階層と選んでいるスロット。panels が無ければ None。"""
@@ -6993,6 +7013,10 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             self._hud_axes = self._update_joystick_normal(axisX, axisY, axisZ)
 
         self._update_pad_and_pov(left_ctr, right_ctr)
+        if self.inputs is not None:                                   # 0.1.32: スティックで選ぶスロット (パネル)
+            self.inputs.update_panel_selection(
+                float(getattr(left_ctr, 'trackpadX', 0.0)), float(getattr(left_ctr, 'trackpadY', 0.0)),
+                float(getattr(right_ctr, 'trackpadX', 0.0)), float(getattr(right_ctr, 'trackpadY', 0.0)))
 
         thr_y, thr_z = self._left_throttle_inputs(left_ctr)
         self.throttle_z.update(thr_z)
