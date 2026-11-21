@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.28'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.40'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -424,10 +424,20 @@ def hud_text_cruise_power(v):
     return '{}%'.format(int(round(max(0.0, min(1.0, float(p))) * 100)))
 
 
+HUD_BMARK_TEXT = 'MNVR'                     # [CONFIG] (0.1.40) Bマークの段に出す文字 ('MNVR' 'BRAKE' など好きな文字列)。None なら元の絵 (Bmark.png)
+HUD_BMARK_BOX = True                       # [CONFIG] (0.1.40) 文字を枠で囲む (CRUISE と同じ枠)
+
+
 def hud_row_bmark():
-    """1段目: Bマーク (左コントローラーのアプリメニュー。離してから 1.5 秒残す)"""
-    return {'id': 'B', 'image': 'Bmark.png', 'on': ['sig:left_app_menu'], 'hold_sec': 1.5,
-            'space_after_px': HUD_NOTICE_ROW_HEIGHT_PX}     # SACC の BRAKE のように、下の段との間を1段分あける
+    """1段目: Bマーク (左コントローラーのアプリメニュー。離してから 1.5 秒残す)。
+    (0.1.40) HUD_BMARK_TEXT に文字があれば、絵の代わりにその文字を出す (フォントに無い字は出ない。Hornet は英大文字と数字が安全)。"""
+    row = {'id': 'B', 'on': ['sig:left_app_menu'], 'hold_sec': 1.5,
+           'space_after_px': HUD_NOTICE_ROW_HEIGHT_PX}      # SACC の BRAKE のように、下の段との間を1段分あける
+    if HUD_BMARK_TEXT:
+        row['parts'] = [{'text': str(HUD_BMARK_TEXT), 'box': bool(HUD_BMARK_BOX)}]
+    else:
+        row['image'] = 'Bmark.png'
+    return row
 
 
 def hud_row_cruise():
@@ -563,11 +573,26 @@ def hud_row_trigger():
             'parts': [{'text_fn': hud_text_trigger, 'reserve': 'L HALF+ R HALF+', 'align': 'left'}]}
 
 
+# --- (0.1.31) パネルの段: 左右のパネルの今の階層と選んでいるスロットを出す (パネルのデバッグ用) -----------
+PANEL_HUD = True                           # [CONFIG] (0.1.31) パネルが定義されているとき、パネルの段を出す
+
+
+def hud_text_panel(v):
+    p = v.get('pnl') or {}
+    return 'L {}   R {}'.format(p.get('L', '-'), p.get('R', '-'))
+
+
+def hud_row_panel():
+    """(0.1.31) パネルの段。'sig:panel' (プロファイルに panels がある) の間だけ出す。"""
+    return {'id': 'dbg_pnl', 'on': ['sig:panel'],
+            'parts': [{'text_fn': hud_text_panel, 'reserve': 'L main/cruise sel 8   R main sel 8', 'align': 'left'}]}
+
+
 HUD_FONT_TEST = True                       # [CONFIG] フォント確認用の段を出す (確認が終わったら False)
 HUD_NOTICE_ROWS = [                        # [CONFIG] 上から並べる順番
     hud_row_bmark(),
     hud_row_cruise(),
-] + ([hud_row_clock()] if HUD_CLOCK_ENABLED else []) + ([hud_row_trigger()] if TRIGGER_HUD else []) + hud_rows_dpad_debug() + (hud_rows_font_test() if HUD_FONT_TEST else [])   # 数値の段をアイコンの段より上に (DPAD2)
+] + ([hud_row_clock()] if HUD_CLOCK_ENABLED else []) + ([hud_row_trigger()] if TRIGGER_HUD else []) + ([hud_row_panel()] if PANEL_HUD else []) + hud_rows_dpad_debug() + (hud_rows_font_test() if HUD_FONT_TEST else [])   # 数値の段をアイコンの段より上に (DPAD2)
 
 # --- 半透明の薄板 (HUD表示部分だけの裏に敷く。ゲーム画面は隠さない) -----------------------
 HUD_PANEL_ENABLED = True                   # [CONFIG] 薄板を付けるか
@@ -4825,8 +4850,78 @@ class HudPlateOverlay(object):
         except Exception:
             pass
 
+    # ---------------------------------------------------------------- (0.1.37) パネル (段階 4)
+    # パネルの絵は主スレッドが PIL で描き、panel_request で渡す。描画スレッド (GL の文脈を持つ側) が次の描画のときに
+    # GL のテクスチャに上げ、HUD と同じ setOverlayTexture で渡す。届いたときだけ上げる (毎フレームは何もしない)。
+    # 0.1.36 の SetOverlayRaw は途中から error 23 (RequestFailed) を返し続けたので、HUD と同じ仕組みにそろえた。
+    def panel_request(self, side, img, pos=None, width_m=None):
+        """主スレッドから: パネルの絵 (PIL の RGBA) を渡す。img = None で隠す。"""
+        with self._lock:
+            if getattr(self, '_panel_req', None) is None:
+                self._panel_req = {}
+            self._panel_req[side] = (img, pos, width_m)
+
+    def _panel_flush(self):
+        """描画スレッドで: 届いたパネルの絵を GL のテクスチャに上げて渡す。テクスチャの大きさはパネルごとに同じ。"""
+        req = getattr(self, '_panel_req', None)
+        if not req:
+            return
+        with self._lock:
+            items = list(req.items())
+            req.clear()
+        if getattr(self, '_panels', None) is None:
+            self._panels = {}
+        for side, (img, pos, width_m) in items:
+            p = self._panels.get(side)
+            try:
+                if img is None:
+                    if p is not None and p['shown']:
+                        self.vroverlay.hideOverlay(p['h'])
+                        p['shown'] = False
+                    continue
+                if p is None:
+                    key = ('steam_vr_joystick_panel_' + side).encode('ascii')
+                    result, h = self.vroverlay.createOverlay(key, key)
+                    if result != 0:
+                        raise RuntimeError("createOverlay failed with code {}".format(result))
+                    tex = self._gfx.new_texture(img.size[0], img.size[1])
+                    ts = openvr.Texture_t()
+                    ts.handle = int(tex)
+                    ts.eType = self._gfx.texture_type
+                    ts.eColorSpace = openvr.ColorSpace_Auto
+                    p = {'h': h, 'tex': tex, 'ts': ts, 'shown': False, 'place': None, 'size': img.size}
+                    self._panels[side] = p
+                    self._set_sort_order(h, int(HUD_OVERLAY_SORT_ORDER) + 2)
+                if img.size != p['size']:
+                    img = img.resize(p['size'])
+                if pos is not None and (pos, width_m) != p['place']:
+                    self._place_one(p['h'], pos, width_m)
+                    p['place'] = (pos, width_m)
+                self._gfx.upload(p['tex'], img, 0, 0, p['size'][1])
+                err = self._gfx.submit(self._fn_texture, p['h'], p['ts'])
+                if err:
+                    print("[Panel Warning] パネル {} の setOverlayTexture error {}".format(side, err))
+                if not p['shown']:
+                    self.vroverlay.showOverlay(p['h'])
+                    p['shown'] = True
+            except Exception as e:
+                print("[Panel Warning] パネル {} を描けません: {}: {}".format(side, type(e).__name__, e))
+
+    def _panel_close(self):
+        for p in (getattr(self, '_panels', None) or {}).values():
+            try:
+                self.vroverlay.destroyOverlay(p['h'])
+            except Exception:
+                pass
+            try:
+                self._gfx.delete_texture(p['tex'])
+            except Exception:
+                pass
+        self._panels = {}
+
     def _apply(self, args, force=False):
         """1回分の描画 (どちらのスレッドからでも同じ)。"""
+        self._panel_flush()                    # 0.1.37: パネルの絵が届いていれば上げる
         (throttle_val, pitch_val, roll_val, yaw_val, bmark_pressed, cece27_toggle, pov_mode,
          signals, buttons, values) = args
         now = time.time()
@@ -4979,6 +5074,7 @@ class HudPlateOverlay(object):
                 gfx = self._gfx
                 try:
                     gfx.make_current()
+                    self._panel_close()                # 0.1.37
                     for out in list(getattr(self, '_outs', ())):
                         gfx.delete_output(out)
                     for t in (self._tex, self._tex_edge):
@@ -5664,6 +5760,8 @@ def default_input_bindings(button_from=None):
 #   - settings のキーは 04 の設定名 (input.trigger_half など)。書かないキーはコードの [CONFIG] の値になる。
 #   - 知らない format / format_version、壊れた JSON は読まない (コードの既定で動く)。知らない命令・入力の名前は警告して、その行だけ使わない / そのまま使う。
 #   - 割り当ての順 = 呼ぶ順。同じ入力に何行書いてもよい。
+#   - (0.1.38) "input": {"unbind": ["left.trigger_value", ...]} = その入力の割り当てを全部外す (既定の割り当ても)。
+#     入力そのものは名前つきの入力として残る (仮想化したまま、ゲームへの元の出力だけを止める)。
 INPUT_PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'profiles')   # プロファイルの置き場所
 INPUT_PROFILE_FILE = 'default.json'        # [CONFIG] (0.1.25) 起動時に読むプロファイル (INPUT_PROFILE_DIR の中のファイル名、またはフルパス)。None = 読まずにコードの既定
 
@@ -5703,7 +5801,15 @@ def load_input_profile(path):
             bindings.append((str(row['input']), str(row['command']), dict(row.get('args') or {})))
         except Exception as e:
             print("[Input] Warning: {} の input.bindings の {} 行目を読めません: {}".format(os.path.basename(path), i + 1, e))
-    return {'name': name, 'bindings': bindings, 'settings': settings, 'path': path}
+    unbind = inp.get('unbind') or []                     # 0.1.38
+    if unbind:
+        drop = set(str(n) for n in unbind)
+        before = len(bindings)
+        bindings = [b for b in bindings if b[0] not in drop]
+        print("[Input] {}: input.unbind で {} 行の割り当てを外しました ({})".format(
+            os.path.basename(path), before - len(bindings), ', '.join(sorted(drop))))
+    return {'name': name, 'bindings': bindings, 'settings': settings, 'path': path,
+            'panels': read_panel_definitions(data.get('panels'))}   # 0.1.29
 
 
 def list_input_profiles():
@@ -5712,6 +5818,210 @@ def list_input_profiles():
         return sorted(n for n in os.listdir(INPUT_PROFILE_DIR) if n.lower().endswith('.json'))
     except Exception:
         return []
+
+# ==============================================================================
+# パネルの定義の読み込みと今の階層 PanelState  (0.1.29、段階 1: 画面にはまだ出さない)
+# ==============================================================================
+# ■ 決まり (正本は非公開の作業メモの「01 の 3.1〜3.3」。ここはそれをコードにしたもの)
+#   - プロファイルの "panels": {"left_game": {"root", "folders"}, "right_game": {"items"}}。どちらも無くてもよい。
+#   - スロットのキーは文字列 "1"〜"8"。"0" は中央 (何もしない) なので、書かれていたら警告して捨てる。
+#   - 下の階層 (ルート以外のフォルダ) の "1" は「戻る」の予約。書かれていたら警告して捨てる。
+#     (0.1.35) ゲームパネルの "8" は普通の項目。「8 = 次へ」の自動の階層はメニューパネルだけの決まり (01 の 3.2、段階 3)。
+#   - (0.1.35) 項目の数 n = 書いた項目の数 (下の階層は「戻る」の 1 を足す)。360/n の扇形の 1〜n 番が選べる (Q19)。
+#     n より大きい番号は届かないので警告する。1〜n の中で書いていない番号は「エラーの NONE」(選べない、01 の 3.1)。
+#   - (0.1.35) 項目の "type": "NONE" = 選べない / "REST" = 選べるが何もしない (Q25)。書かなければ普通の項目。
+#   - (0.1.35) 項目の "block_a": true = その項目を選んでいる間、そのパネルの側の A ボタンをゲームへ出さない (Q31、GEAR など)。
+#   - 右パネルには階層が無い。フォルダを書いたら警告して捨て、項目は "items" の 1 つの表だけ。
+#   - "folder" は、そのスロットを実行したときに入るフォルダの名前。無い名前・循環は警告して、その行を捨てる。
+#   - PanelState が持つのは、今いる階層の道 (stack) と選んでいるスロット (selected) だけ。
+#     プロファイルを切り替えると InputLayer ごと作り直すので、階層はルートから始まる (3.3)。
+PANEL_SLOTS = ('1', '2', '3', '4', '5', '6', '7', '8')
+PANEL_BACK_SLOT = '1'     # 下の階層で「戻る」
+
+
+def _check_panel_folders(root, folders):
+    """(0.1.29) ルートから届く 'folder' を調べる。指す先が無い行、フォルダの循環は警告して捨てる。ルートが無ければ空で作る。"""
+    if root not in folders:
+        folders[root] = {}
+
+    def visit(name, path):
+        for slot in list(folders.get(name, {}).keys()):
+            target = folders[name][slot].get('folder')
+            if target is None:
+                continue
+            target = str(target)
+            if target not in folders:
+                print("[Panel] Warning: フォルダ '{}' の '{}' が指す '{}' がありません。この行は捨てます".format(name, slot, target))
+                del folders[name][slot]
+            elif target in path:
+                print("[Panel] Warning: フォルダ '{}' の '{}' が循環しています ('{}')。この行は捨てます".format(name, slot, target))
+                del folders[name][slot]
+            else:
+                visit(target, path + [target])
+
+    visit(root, [root])
+
+
+def _read_panel_side(side, is_left):
+    """(0.1.29) 左 (folders あり) か右 (items だけ) の一方を読み、{'root', 'folders'} にする。形が違えば None。"""
+    if not isinstance(side, dict):
+        print("[Panel] Warning: パネルの中身は {} の形で書いてください。このパネルは無しで続けます")
+        return None
+    if is_left:
+        root = str(side.get('root', 'main'))
+        raw_folders = side.get('folders') or {}
+    else:
+        root = 'main'
+        if 'folders' in side:
+            print("[Panel] Warning: right_game にフォルダは書けません。'folders' を捨てます")
+        raw_folders = {root: side.get('items') or {}}
+    if not isinstance(raw_folders, dict):
+        print("[Panel] Warning: folders は {フォルダ名: {スロット: 項目}} の形で書いてください。このパネルは無しで続けます")
+        return None
+    folders = {}
+    for fname, table in raw_folders.items():
+        fname = str(fname)
+        if not isinstance(table, dict):
+            print("[Panel] Warning: フォルダ '{}' は {スロット: 項目} の形で書いてください。このフォルダは捨てます".format(fname))
+            continue
+        rows = {}
+        for slot, row in table.items():
+            slot = str(slot)
+            if slot not in PANEL_SLOTS:
+                print("[Panel] Warning: フォルダ '{}' のスロット '{}' は使えません (1〜8 だけ)。捨てます".format(fname, slot))
+                continue
+            if fname != root and slot == PANEL_BACK_SLOT:
+                print("[Panel] Warning: 下の階層の '1' は「戻る」の予約なので書けません (フォルダ '{}')。捨てます".format(fname))
+                continue
+            if not isinstance(row, dict):
+                print("[Panel] Warning: フォルダ '{}' のスロット '{}' の項目は {} の形で書いてください。捨てます".format(fname, slot))
+                continue
+            if not is_left and 'folder' in row:
+                print("[Panel] Warning: 右パネルの項目にフォルダは書けません (スロット '{}')。'folder' を捨てます".format(slot))
+                row = dict((k, v) for k, v in row.items() if k != 'folder')
+            rows[slot] = row
+        n = len(rows) + (0 if fname == root else 1)
+        for slot in sorted(rows.keys()):
+            if int(slot) > n:
+                print("[Panel] Warning: フォルダ '{}' の '{}' は届きません (項目は {} 個なので 1〜{} 番だけ選べる。空きは NONE で埋める)".format(
+                    fname, slot, n, n))
+        folders[fname] = rows
+    _check_panel_folders(root, folders)
+    return {'root': root, 'folders': folders}
+
+
+def read_panel_definitions(raw):
+    """(0.1.29) プロファイルの "panels" を読む。返り値 = {'left_game': 定義 か None, 'right_game': 定義 か None}。
+    'panels' が無ければ None (パネル無しで続ける)。形が違えば警告して None。"""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        print("[Panel] Warning: panels は {'left_game': ..., 'right_game': ...} の形で書いてください。パネルは無しで続けます")
+        return None
+    left = _read_panel_side(raw['left_game'], True) if 'left_game' in raw else None
+    right = _read_panel_side(raw['right_game'], False) if 'right_game' in raw else None
+    return {'left_game': left, 'right_game': right}
+
+
+class PanelState(object):
+    """(0.1.29) 1 枚のパネルの今の階層 (stack) と選んでいるスロット (selected)。画面にはまだ出さない (段階 1)。
+    execute() は選んでいるスロットを実行した結果を (動き, 中身) で返す:
+      ('none', None)    何もしない (スロット 0、空き、選んでいない)
+      ('item', 項目)    項目を実行する (中身は JSON の項目の dict)
+      ('enter', 名前)   フォルダに入った (stack を進めた)
+      ('back', None)    1 つ上の階層へ戻った (stack を戻した)
+      ('rest', None)    REST (選べるが何もしない)
+    """
+
+    def __init__(self, side_name, defs):
+        self.side_name = side_name
+        self.root = defs['root']
+        self.folders = defs['folders']
+        self.stack = [self.root]        # 今いる階層の道 (先頭 = ルート)
+        self.selected = None            # 選んでいるスロット (文字列)、無ければ None
+
+    def table(self):
+        return self.folders.get(self.stack[-1], {})
+
+    def slot_count(self):
+        """(0.1.35) 今の階層の項目の数 (扇形の数 n) = 書いた項目の数。下の階層は「戻る」の 1 を足す (01 の Q19)。"""
+        n = len(self.table()) + (1 if len(self.stack) > 1 else 0)
+        return max(1, min(8, n))
+
+    def slot_kind(self, slot):
+        """(0.1.35) スロットの種類: 'back' / 'error_none' (書いていない) / 'none' / 'rest' / 'folder' / 'item'。"""
+        if len(self.stack) > 1 and slot == PANEL_BACK_SLOT:
+            return 'back'
+        row = self.table().get(slot)
+        if row is None:
+            return 'error_none'
+        t = str(row.get('type', '')).upper()
+        if t == 'NONE':
+            return 'none'
+        if t == 'REST':
+            return 'rest'
+        return 'folder' if row.get('folder') is not None else 'item'
+
+    def selectable(self, slot):
+        return self.slot_kind(slot) not in ('error_none', 'none')
+
+    def select(self, slot):
+        """スロットを選ぶ。'0' と知らないスロットは、選んでいない扱いにする。"""
+        slot = str(slot)
+        self.selected = slot if slot in PANEL_SLOTS else None
+        return self.selected
+
+    def execute(self):
+        slot = self.selected
+        if slot is None:
+            return ('none', None)
+        kind = self.slot_kind(slot)
+        if kind == 'back':
+            self.stack.pop()
+            self.selected = None            # 0.1.33: 階層が変わったら選びを消す
+            return ('back', None)
+        if kind in ('error_none', 'none'):
+            return ('none', None)
+        if kind == 'rest':
+            return ('rest', None)
+        row = self.table().get(slot)
+        target = row.get('folder')
+        if target is not None:
+            self.stack.append(str(target))
+            self.selected = None                # 0.1.33: 階層が変わったら選びを消す
+            return ('enter', str(target))
+        return ('item', row)
+
+
+def build_panel_states(profile):
+    """(0.1.29) プロファイルの panels から {'left_game': PanelState, 'right_game': PanelState} を作る。無ければ空の dict。"""
+    defs = (profile or {}).get('panels') or {}
+    out = {}
+    if defs.get('left_game'):
+        out['left_game'] = PanelState('left_game', defs['left_game'])
+    if defs.get('right_game'):
+        out['right_game'] = PanelState('right_game', defs['right_game'])
+    return out
+
+
+PANEL_STICK_DEADZONE = 0.60  # [CONFIG] (0.1.30) 倒した量 (0〜1) がこれ以上になったら選ぶ (それ未満では選びを変えない。選んだ項目は残る)
+PANEL_STICK_RELEASE = 0.45   # [CONFIG] (0.1.35) 一度倒したあと、これ未満に戻るまでは倒したままとみなす (01 の Q19、VirtualDPad と同じ)
+PANEL_PRESS_SEC = 0.10       # [CONFIG] (0.1.34) パネルの項目でボタンを出すとき、押している時間 [秒]
+PANEL_ITEM_COMMANDS = ('vjoy_button',)   # (0.1.34) パネルの項目に書ける命令 (項目の中身は作りながら増やす)
+
+
+def panel_slot_from_stick(x, y, n, deadzone=None):
+    """(0.1.30) スティックの (x, y) (右 +、上 +) から選ぶスロット '1'〜'n' を返す。
+    項目 1 が真上、時計回りに 360/n の扇形 (01 の Q19)。倒し量が deadzone 未満なら None (選びを変えない)。"""
+    if deadzone is None:
+        deadzone = PANEL_STICK_DEADZONE
+    if n < 1 or math.hypot(x, y) < deadzone:
+        return None
+    sector = 360.0 / n
+    ang = math.degrees(math.atan2(x, y)) % 360.0            # 真上 = 0、時計回り
+    idx = int(((ang + sector / 2.0) % 360.0) // sector)      # 項目 1 の扇形を真上に中心づける
+    return str(idx + 1)
+
 
 # ==============================================================================
 # 入力の仮想化の層 (段階 3): トリガーの状態機械 TriggerState  (0.1.23)
@@ -5846,7 +6156,7 @@ _ZONE_BUTTONS = {'left': [4, 5, 6, 7, 8], 'right': [12, 13, 14, 15, 16]}   # Vir
 
 class InputLayer(object):
     """生の入力 → 名前つきの入力 → 割り当て → 命令 → バス (上の説明を参照)。owner は Joystick (config と区画の計算に使う)。"""
-    COMMANDS = ['vjoy_button', 'vjoy_zone_button', 'vjoy_axis', 'vjoy_dpad']   # 命令の一覧 (中身は _cmd_<名前>)
+    COMMANDS = ['vjoy_button', 'vjoy_zone_button', 'vjoy_axis', 'vjoy_dpad', 'panel_execute']   # 命令の一覧 (中身は _cmd_<名前>)
 
     def __init__(self, owner, bus, bindings=None, profile=None):
         """bindings = 割り当ての一覧 (無ければ profile、それも無ければコードの既定)。profile = load_input_profile() の結果か None。"""
@@ -5869,6 +6179,10 @@ class InputLayer(object):
             print("[Input] Warning: 'input.trigger_half_delay' を読めません。{} を使います".format(TRIGGER_HALF_DELAY_SEC))
             self.trigger_half_delay = TRIGGER_HALF_DELAY_SEC
         self.trigger_haptic = self._read_bool(settings, 'input.trigger_haptic', TRIGGER_HAPTIC)  # 0.1.26
+        self.panels = build_panel_states(profile)   # 0.1.29: 左右のパネルの今の階層 (画面にはまだ出さない)
+        for side_name in sorted(self.panels.keys()):
+            ps = self.panels[side_name]
+            print("[Panel] {}: ルート '{}'、フォルダ {}".format(side_name, ps.root, ', '.join(sorted(ps.folders.keys()))))
         if bindings is None and profile:
             bindings = profile['bindings']
         if bindings is None:
@@ -5947,7 +6261,7 @@ class InputLayer(object):
         ts = self.triggers[hand]
         old_zone = ts.zone_text()
         was_half, was_full = ts.half_on, ts.full_on
-        half_assigned = n_half in self._bind or self.trigger_test >= 2
+        half_assigned = self._half_assigned(n_half) or self.trigger_test >= 2     # 0.1.33: パネルの選びで変わる
         ts.update(value, half_assigned, n_full in self._bind or self.trigger_test >= 1, self.thresholds,
                   self.trigger_mode, time.time(), self.trigger_half_delay)
         if self.trigger_test and ts.zone_text() != old_zone:
@@ -5957,6 +6271,151 @@ class InputLayer(object):
             self.owner._haptic_pulse(ctr, TRIGGER_HAPTIC_STRENGTH, TRIGGER_HAPTIC_PULSES, TRIGGER_HAPTIC_INTERVAL_SEC)
         self.set(n_half, ts.half_on)
         self.set(n_full, ts.full_on)
+
+    def update_panel_selection(self, lx, ly, rx, ry, right_enabled=True):
+        """(0.1.32) 左右のスティックの倒し方で、各パネルの選ぶスロットを決める。
+        倒し量が足りなければ選びを変えない (選んだ項目は残る)。変わったときだけ [Panel] の行を出す。
+        (0.1.33) 右パネルは right_enabled (十字キーモードでない) のときだけ動く (01 の 3.1)。
+        右の項目で exec が 'trigger' でないもの (既定 'tilt') は、倒した時点で実行する。
+        一度中央 (遊びの中) に戻してから同じ向きに倒すと、同じ項目をもう一度実行する。"""
+        self._panel_release_due()                    # 0.1.34
+        if not self.panels:
+            return
+        if not hasattr(self, '_panel_stick_out'):
+            self._panel_stick_out = {}
+        for side, x, y, on in (('left_game', lx, ly, True), ('right_game', rx, ry, right_enabled)):
+            ps = self.panels.get(side)
+            if ps is None:
+                continue
+            dz = PANEL_STICK_RELEASE if self._panel_stick_out.get(side) else PANEL_STICK_DEADZONE   # 0.1.35
+            slot = panel_slot_from_stick(x, y, ps.slot_count(), dz) if on else None
+            if slot is not None and not ps.selectable(slot):
+                slot = None if not self._panel_stick_out.get(side) else ps.selected   # NONE は選べない (選びはそのまま)
+                if slot is None:
+                    continue
+            if slot is None:
+                self._panel_stick_out[side] = False
+                continue
+            if self._panel_stick_out.get(side) and slot == ps.selected:
+                continue
+            self._panel_stick_out[side] = True
+            if slot != ps.selected:
+                ps.select(slot)
+                print("[Panel] {}: 選ぶ {}".format(side, slot))
+            if side == 'right_game' and not self._panel_waits_trigger(side):
+                self._panel_run(side, 'tilt')
+
+    def _panel_waits_trigger(self, side):
+        """(0.1.33) そのパネルで今、トリガーで実行する項目を選んでいるか。
+        左は項目を選んでいればいつも (左 GAME パネルは全部トリガーで実行)。右は項目の exec が 'trigger' のときだけ。
+        下の階層の 1 (戻る) と REST も、左ではトリガー待ち。"""
+        ps = (self.panels or {}).get(side)
+        if ps is None or ps.selected is None:
+            return False
+        kind = ps.slot_kind(ps.selected)
+        if kind in ('error_none', 'none'):
+            return False
+        if side == 'left_game':
+            return True                      # 左 GAME パネルは、戻る・REST・フォルダも全部トリガー
+        row = ps.table().get(ps.selected) or {}
+        if side == 'left_game':
+            return True
+        return row.get('exec', 'tilt') == 'trigger'
+
+    def _a_blocked(self, name, value):
+        """(0.1.35) A ボタンを封じるか。そのパネルの側 (right.a = 右パネル、left.a = 左パネル) で、
+        "block_a": true の項目を選んでいる間に押した A は、ゲームへ出さない。押したときに封じた A は、離すときも出さない。"""
+        if not hasattr(self, '_a_held_blocked'):
+            self._a_held_blocked = set()
+        if not value:
+            if name in self._a_held_blocked:
+                self._a_held_blocked.discard(name)
+                return True
+            return False
+        ps = (self.panels or {}).get('right_game' if name == 'right.a' else 'left_game')
+        row = ps.table().get(ps.selected) if (ps is not None and ps.selected is not None) else None
+        if row is not None and row.get('block_a') is True:
+            self._a_held_blocked.add(name)
+            print("[Panel] {}: A を封じました ({} を選んでいる間)".format(name, row.get('label', ps.selected)))
+            return True
+        return False
+
+    def _half_assigned(self, n_half):
+        """(0.1.33) 半押しに割り当てがあるか (トリガーのロック用)。panel_execute だけの割り当ては、そのパネルで
+        今トリガーで実行する項目を選んでいるときだけ「ある」とみなす。選んでいなければ、引き切り (GUN など) が出る。"""
+        for cmd, args in self._bind.get(n_half, ()):
+            if cmd != 'panel_execute' or self._panel_waits_trigger(args.get('panel', 'left_game')):
+                return True
+        return False
+
+    def _panel_item_press(self, side, slot, row):
+        """(0.1.34) 項目の 'command' と 'args' (割り当てと同じ書き方) を呼ぶ。押して、PANEL_PRESS_SEC 後に離す。
+        命令が無い項目は行に出すだけ。書ける命令は PANEL_ITEM_COMMANDS だけ。"""
+        cmd = row.get('command')
+        if cmd is None:
+            return
+        if cmd not in PANEL_ITEM_COMMANDS:
+            print("[Panel] Warning: パネルの項目に書ける命令は {} だけです ({} の {}: {!r})".format(
+                ', '.join(PANEL_ITEM_COMMANDS), side, slot, cmd))
+            return
+        args = dict(row.get('args') or {})
+        name = 'panel.{}.{}'.format(side, slot)
+        # (0.1.37) "buttons": [a, b] = 同時押し (MNVR がゲームによっては 2 つのボタンの同時押しなので)
+        many = [dict(args, button=b) for b in args['buttons']] if isinstance(args.get('buttons'), list) else [args]
+        if not hasattr(self, '_panel_releases'):
+            self._panel_releases = []
+        for a in many:
+            try:
+                getattr(self, '_cmd_' + cmd)(name, True, a)
+            except Exception as e:
+                print("[Panel] Warning: {} の {} を実行できません: {}".format(side, slot, e))
+                continue
+            self._panel_releases.append((time.time() + PANEL_PRESS_SEC, cmd, name, a))
+
+    def _panel_release_due(self):
+        """(0.1.34) 押す時間が過ぎた項目のボタンを離す (毎フレーム、update_panel_selection から)。"""
+        rel = getattr(self, '_panel_releases', None)
+        if not rel:
+            return
+        now = time.time()
+        keep = []
+        for due, cmd, name, args in rel:
+            if now < due:
+                keep.append((due, cmd, name, args))
+                continue
+            try:
+                getattr(self, '_cmd_' + cmd)(name, False, args)
+            except Exception as e:
+                print("[Panel] Warning: {} を離せません: {}".format(name, e))
+        self._panel_releases = keep
+
+    def _panel_run(self, side, how):
+        """(0.1.33) パネルで選んでいる項目を実行して、結果を [Panel] の行に出す。how = 'trigger' / 'tilt'。
+        項目の中身 (ゲームへ何を出すか) はまだ決めていないので、段階 2 では行に出すだけ。"""
+        ps = self.panels[side]
+        slot = ps.selected
+        kind, what = ps.execute()
+        if kind == 'item':
+            print("[Panel] {}: 実行 {} {} ({})".format(side, slot, what.get('label', what), how))
+            self._panel_item_press(side, slot, what)
+        elif kind == 'enter':
+            print("[Panel] {}: {} でフォルダ '{}' に入る".format(side, slot, what))
+        elif kind == 'back':
+            print("[Panel] {}: 戻る (今 '{}')".format(side, ps.stack[-1]))
+        elif kind == 'rest':
+            print("[Panel] {}: REST (何もしない)".format(side))
+        else:
+            print("[Panel] {}: 何もしない (選び {})".format(side, slot or '-'))
+
+    def panel_hud_values(self):
+        """(0.1.31) HUD の段用: 左右のパネルの今の階層と選んでいるスロット。panels が無ければ None。"""
+        if not self.panels:
+            return None
+        out = {}
+        for side, mark in (('left_game', 'L'), ('right_game', 'R')):
+            ps = self.panels.get(side)
+            out[mark] = '-' if ps is None else '{} sel {}'.format('/'.join(ps.stack), ps.selected or '-')   # HUD のフォントに '>' が無い
+        return out
 
     def trigger_hud_values(self):
         """(0.1.26) HUD の区間の段に渡す値 {'left': (区間, 操作), 'right': ...} と、段を出すか。"""
@@ -5983,6 +6442,8 @@ class InputLayer(object):
             return
         self.values[name] = value
         self.n_events += 1
+        if name in ('left.a', 'right.a') and self._a_blocked(name, value):
+            return                           # 0.1.35: パネルの項目の block_a
         if self.trigger_test and (name.endswith('.trigger_half') or name.endswith('.trigger_full')):
             print("[TRG] {} {}".format(name, '成り立った' if value else '外れた'))
         for cmd, args in self._bind.get(name, ()):
@@ -5995,6 +6456,19 @@ class InputLayer(object):
             if need and not getattr(self.owner.config, need):
                 return
         self.bus.set_button(args['button'], bool(value), 'in:' + name)
+
+    def _cmd_panel_execute(self, name, value, args):
+        """(0.1.33) 命令 'panel_execute': 入力が成り立ったとき、args['panel'] のパネルで選んでいる項目を実行する。
+        トリガー待ちの項目 (左は全部、右は exec が 'trigger') だけ。それ以外を選んでいるときは何もしない
+        (そのときはロックの決まりで、この入力は割り当てが無いとみなされ、引き切りの割り当てが出る)。"""
+        if not value:
+            return
+        side = args.get('panel', 'left_game')
+        if side not in (self.panels or {}):
+            print("[Panel] {} がプロファイルに無いので実行できません ({})".format(side, name))
+            return
+        if self._panel_waits_trigger(side):
+            self._panel_run(side, 'trigger')
 
     def _cmd_vjoy_zone_button(self, name, value, args):
         hand = args['hand']
@@ -6011,8 +6485,11 @@ class InputLayer(object):
     def _cmd_vjoy_dpad(self, name, value, args):
         if 'right.stick_dir' not in self.values or 'left.pov_mode' not in self.values:
             return
-        self.owner._dpad_output(bool(self.values['left.pov_mode']), self.values['right.stick_dir'],
-                                'in:right.stick_dir', args.get('buttons'), args.get('pov', 1))
+        pov = bool(self.values['left.pov_mode'])
+        direction = self.values['right.stick_dir']
+        if not pov and 'right_game' in (self.panels or {}):
+            direction = 5     # 0.1.34: 右パネルがある間、十字キーモードでないときのボタンは出さない (パネルの項目が代わり)
+        self.owner._dpad_output(pov, direction, 'in:right.stick_dir', args.get('buttons'), args.get('pov', 1))
 
     def status_lines(self):
         on = sorted(k for k, v in self.values.items() if v is True)
@@ -6040,6 +6517,123 @@ class InputLayer(object):
 # ==============================================================================
 # メイン Joystick クラス
 # ==============================================================================
+# ==============================================================================
+# パネルの描画 PanelOverlay  (0.1.36、段階 4)
+# ==============================================================================
+# ■ 決まり (正本は非公開の作業メモの「01 の 3.1・3.2」)
+#   - 左右のパネルは、HUD とは別のオーバーレイ。奥行き表示 (fakefar) なしで単純に描く (01 の 3.1)。
+#     置き場所は HUD と同じ座席の空間 (TrackingUniverseSeated) で、HUD の窓の下 (自動)。位置と大きさは [CONFIG]。
+#   - 絵は主スレッドが PIL で描き、変わったとき (階層・選び・十字キーモード・位置) だけ HUD に渡す。
+#     (0.1.37) HUD の描画スレッドが GL のテクスチャに上げて setOverlayTexture で渡す (HudPlateOverlay.panel_request)。
+#     HUD が無いとき (HUD を作れなかったとき) はパネルも出ない。
+#   - 配置は Q19: n 等分、1 番が真上、時計回り。境目の線の長さ・中心の円・文字までの距離は n によらず固定 (Q23)。
+#   - 選んでいる項目の扇形を薄く塗る。書いていない番号 (エラーの NONE) は赤紫、NONE と REST は薄い色 (Q25、Q29-1)。
+#   - 上に今の階層 (パンくず) を出す。オンの項目の短いバー (Q23) は、項目のオン / オフをまだ持っていないので後で。
+#   - 十字キーモードの間、右パネルは動かない。隠すかは PANEL_HIDE_RIGHT_IN_POV (0.1.40 から既定は隠さない)。
+PANEL_DRAW_ENABLED = True                  # [CONFIG] (0.1.36) パネルを描く (False = 描かない。HUD の dbg_pnl の段だけ)
+PANEL_OVERLAY_POS = None                   # [CONFIG] (0.1.36) パネルの中心 {'left_game': (x, y, z), 'right_game': (x, y, z)} [m]。
+                                           #          HUD_PLATE_POS と同じ座席の空間。None = HUD の窓の下の端から自動 (0.1.37)
+PANEL_BELOW_HUD_GAP_M = 0.02               # [CONFIG] (0.1.37) 自動の位置: HUD の窓の下の端とパネルの上の端の間 [m]
+PANEL_SIDE_OFFSET_M = 0.10                 # [CONFIG] (0.1.37) 自動の位置: HUD の窓の中心から左右のパネルの中心までの横の距離 [m]
+PANEL_OVERLAY_WIDTH_M = 0.16               # [CONFIG] (0.1.36) パネルの幅 [m]
+PANEL_TEX_PX = 512                         # [CONFIG] (0.1.36) パネルの絵の大きさ [px] (正方形)
+PANEL_BG = (0, 0, 0, 110)                  # [CONFIG] (0.1.36) 背景の円の色 (R, G, B, 不透明度)。None = 背景なし (01 の Q22)
+PANEL_COLOR = HUD_COLOR_GREEN              # [CONFIG] (0.1.36) 線と文字の色
+PANEL_COLOR_DIM = (130, 255, 180, 110)     # [CONFIG] (0.1.36) NONE / REST の文字の色
+PANEL_COLOR_ERROR = (255, 0, 255, 255)     # [CONFIG] (0.1.36) エラーの NONE (書いていない番号) の色 (赤紫、Q29-1)
+PANEL_COLOR_SELECT = (130, 255, 180, 70)   # [CONFIG] (0.1.36) 選んでいる扇形の塗り
+POV_MODE_NEEDS_EXTRA_TOUCH = True          # [CONFIG] (0.1.40) 十字キーモードに入るのは「左スティックのタッチ + POV_MODE_EXTRA_TOUCH_IDS のタッチ」のときだけ。False = 0.1.39 までと同じ (スティックのタッチかアプリメニューだけで入る)
+POV_MODE_EXTRA_TOUCH_IDS = [7]             # [CONFIG] (0.1.40) 一緒に触れているボタンの番号 (openvr の EVRButtonId)。7 = k_EButton_A = Oculus Touch の左 X ボタン
+PANEL_HIDE_RIGHT_IN_POV = False            # [CONFIG] (0.1.36) 十字キーモードの間、右パネルを隠す (0.1.40: 既定は隠さない。にいちごさんの決定)
+
+
+def _panel_text_size(font, text):
+    """(0.1.36) 文字の幅と高さ [px]。新しい Pillow (getbbox) と古い Pillow (getsize) の両方で動く。"""
+    try:
+        b = font.getbbox(text)
+        return b[2] - b[0], b[3] - b[1]
+    except AttributeError:
+        return font.getsize(text)
+
+
+def _panel_ring(c, r, a0, a1, steps):
+    """(0.1.36) 中心 c、半径 r の円弧の点 (角度は真上 0°、時計回り [度])。"""
+    pts = []
+    for k in range(steps + 1):
+        a = math.radians(a0 + (a1 - a0) * k / float(steps))
+        pts.append((c + r * math.sin(a), c - r * math.cos(a)))
+    return pts
+
+
+def draw_panel_image(ps, fonts, size=None):
+    """(0.1.36) PanelState の今の階層を、ラジアルのパネルの絵 (PIL の RGBA) にする。"""
+    S = int(size or PANEL_TEX_PX)
+    img = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    c = S / 2.0
+    R = S * 0.44              # 外の円
+    r_in = S * 0.11           # 中心の円
+    r_lab = S * 0.29          # 文字の中心
+    lw = max(2, S // 170)
+    n = ps.slot_count()
+    w = 360.0 / n
+    if PANEL_BG is not None:
+        d.ellipse([c - R, c - R, c + R, c + R], fill=PANEL_BG)
+    if ps.selected is not None and int(ps.selected) <= n:
+        i = int(ps.selected) - 1
+        a0, a1 = i * w - w / 2.0, i * w + w / 2.0
+        d.polygon(_panel_ring(c, R, a0, a1, 24) + _panel_ring(c, r_in, a1, a0, 12), fill=PANEL_COLOR_SELECT)
+    d.line(_panel_ring(c, R, 0, 360, 96), fill=PANEL_COLOR, width=lw)
+    d.line(_panel_ring(c, r_in, 0, 360, 48), fill=PANEL_COLOR, width=lw)
+    if n > 1:
+        for i in range(n):
+            a = math.radians(i * w - w / 2.0)
+            d.line([(c + r_in * math.sin(a), c - r_in * math.cos(a)), (c + R * math.sin(a), c - R * math.cos(a))],
+                   fill=PANEL_COLOR, width=lw)
+    # 文字 (扇形の幅に収まるまで小さくする)
+    max_w = S * 0.30 if n <= 2 else min(S * 0.30, 2.0 * r_lab * math.sin(math.radians(w / 2.0)) * 0.92)
+    for i in range(n):
+        slot = str(i + 1)
+        kind = ps.slot_kind(slot)
+        row = ps.table().get(slot) or {}
+        color = PANEL_COLOR
+        if kind == 'back':
+            text = 'BACK'
+        elif kind == 'error_none':
+            text, color = 'NONE', PANEL_COLOR_ERROR
+        elif kind in ('none', 'rest'):
+            text, color = str(row.get('label', kind.upper())), PANEL_COLOR_DIM
+        else:
+            text = str(row.get('label', slot))
+        text = text.upper()
+        fs = int(S * 0.066)
+        font = fonts.get(HUD_TEXT_FONT, fs)
+        tw, th = _panel_text_size(font, text)
+        tri = fs * 0.55 if kind == 'folder' else 0.0     # フォルダの印 (▸ を描く。HUD のフォントに '>' が無いので図形で)
+        while tw + tri * 1.4 > max_w and fs > 10:
+            fs -= 2
+            font = fonts.get(HUD_TEXT_FONT, fs)
+            tw, th = _panel_text_size(font, text)
+            tri = fs * 0.55 if kind == 'folder' else 0.0
+        if n == 1:
+            x, y = c, c - (r_in + R) / 2.0
+        else:
+            a = math.radians(i * w)
+            k = 1.08 if n > 4 else 0.92                  # 項目が少ないと扇形が広いので、文字を少し内側へ
+            x, y = c + r_lab * math.sin(a) * k, c - r_lab * math.cos(a) * k
+        x0 = x - (tw + tri * 1.4) / 2.0
+        d.text((x0, y - th / 2.0 - fs * 0.15), text, font=font, fill=color)
+        if tri:
+            tx = x0 + tw + tri * 0.4
+            d.polygon([(tx, y - tri / 2.0), (tx + tri, y), (tx, y + tri / 2.0)], fill=color)
+    # 上に今の階層 (区切りは '/'。HUD のフォントに '>' が無い)
+    crumb = ' / '.join(ps.stack).upper()
+    font = fonts.get(HUD_TEXT_FONT, int(S * 0.045))
+    tw, th = _panel_text_size(font, crumb)
+    d.text((c - tw / 2.0, S * 0.005), crumb, font=font, fill=PANEL_COLOR)
+    return img
+
+
 class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, VirtualPad):
     def __init__(self):
         print("=== {} ===".format(app_version_text()))
@@ -6383,12 +6977,18 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             self.device._sdk.SetContPov(int(value), self.device.rID, int(pov_id))
 
     def _update_pad_and_pov(self, left_ctr, right_ctr):
-        povtouchfind = (
-            self.left_app_menu_pressed
-            or (openvr.k_EButton_ApplicationMenu in self.left_touched_buttons)
-            or self.left_touchpad_touched
-            or any(self._is_left_touched(i) for i in self.pov_touch_ids)
-        )
+        if POV_MODE_NEEDS_EXTRA_TOUCH:
+            # (0.1.40) 左スティックのタッチ + X ボタンのタッチ の両方で十字キーモード (スティックのタッチだけでは入らない)
+            stick_touch = self.left_touchpad_touched or any(self._is_left_touched(i) for i in self.pov_touch_ids)
+            extra_touch = any(self._is_left_touched(i) for i in POV_MODE_EXTRA_TOUCH_IDS)
+            povtouchfind = bool(stick_touch and extra_touch)
+        else:
+            povtouchfind = (
+                self.left_app_menu_pressed
+                or (openvr.k_EButton_ApplicationMenu in self.left_touched_buttons)
+                or self.left_touchpad_touched
+                or any(self._is_left_touched(i) for i in self.pov_touch_ids)
+            )
 
         is_pov_mode = (povtouchfind != self.joysticknotouchpov)
         self.is_pov_mode = is_pov_mode
@@ -6769,6 +7369,44 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             print("[DPAD] Warning: 数値を作れませんでした: {}".format(e))
         return self._dpad_dbg_vals
 
+    def _panel_pos(self, side):
+        """(0.1.37) パネルの中心の位置 [m]。PANEL_OVERLAY_POS が無ければ、HUD の窓の下の端から決める。"""
+        if PANEL_OVERLAY_POS:
+            return tuple(PANEL_OVERLAY_POS[side])
+        cx, cy, cz = self.hud.plate_center()
+        bottom = cy - self.hud.plate_h * self.hud.mpp / 2.0
+        y = bottom - float(PANEL_BELOW_HUD_GAP_M) - float(PANEL_OVERLAY_WIDTH_M) / 2.0
+        dx = float(PANEL_SIDE_OFFSET_M)
+        return (cx - dx if side == 'left_game' else cx + dx, y, cz)
+
+    def _panel_draw_frame(self):
+        """(0.1.36) 左右のパネルを、パネルの今の状態に合わせる。プロファイルに無いパネルは隠す。
+        (0.1.37) 絵は PIL で描いて HUD に渡す (HUD の描画スレッドが GL のテクスチャに上げる)。変わったときだけ。"""
+        if not PANEL_DRAW_ENABLED or self.hud is None or not getattr(self.hud, 'initialized', False):
+            return
+        if not hasattr(self, '_panel_sent'):
+            self._panel_sent = {}
+            self._panel_fonts = HudFonts()
+        panels = (self.inputs.panels if self.inputs is not None else None) or {}
+        for side in ('left_game', 'right_game'):
+            ps = panels.get(side)
+            hide = ps is None or (side == 'right_game' and PANEL_HIDE_RIGHT_IN_POV and self.is_pov_mode)
+            if hide:
+                if self._panel_sent.get(side) is not None:
+                    self.hud.panel_request(side, None)
+                    self._panel_sent[side] = None
+                continue
+            try:
+                pos = self._panel_pos(side)
+                sig = (id(ps), tuple(ps.stack), ps.selected, pos)
+                if sig == self._panel_sent.get(side):
+                    continue
+                self.hud.panel_request(side, draw_panel_image(ps, self._panel_fonts), pos, PANEL_OVERLAY_WIDTH_M)
+                self._panel_sent[side] = sig
+            except Exception as e:
+                print("[Panel Warning] パネル {} を描けません: {}: {}".format(side, type(e).__name__, e))
+                self._panel_sent[side] = 'error'
+
     def update(self, left_ctr, right_ctr):
         self._input_frame(left_ctr, right_ctr)     # 0.1.21: 生の入力は InputLayer へ (無ければ VirtualPad.update)
 
@@ -6794,6 +7432,12 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             self._hud_axes = self._update_joystick_normal(axisX, axisY, axisZ)
 
         self._update_pad_and_pov(left_ctr, right_ctr)
+        if self.inputs is not None:                                   # 0.1.32: スティックで選ぶスロット (パネル)
+            self.inputs.update_panel_selection(
+                float(getattr(left_ctr, 'trackpadX', 0.0)), float(getattr(left_ctr, 'trackpadY', 0.0)),
+                float(getattr(right_ctr, 'trackpadX', 0.0)), float(getattr(right_ctr, 'trackpadY', 0.0)),
+                right_enabled=not self.is_pov_mode)                   # 0.1.33: 十字キーモードの間、右パネルは動かない
+        self._panel_draw_frame()                                      # 0.1.36: パネルを描く (変わったときだけ)
 
         thr_y, thr_z = self._left_throttle_inputs(left_ctr)
         self.throttle_z.update(thr_z)
@@ -6820,6 +7464,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             else:
                 trg_values, trg_active = None, False
             hud_roll = (ax - 0.5) * 2.0
+            pnl_values = self.inputs.panel_hud_values() if (self.inputs is not None and PANEL_HUD) else None   # 0.1.31
             hud_yaw = (az - 0.5) * 2.0
             if self.hud_swap_yaw_roll:
                 hud_yaw, hud_roll = hud_roll, hud_yaw
@@ -6836,11 +7481,12 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                          'sig:throttle_grab': self.throttle_z.throttle_grabbed,
                          'sig:cruise': bool(CRUISE_MODE_ENABLED),
                          'sig:dpad_debug': self.dpad_debug_hud,
-                         'sig:trigger_zone': trg_active},
+                         'sig:trigger_zone': trg_active,
+                         'sig:panel': pnl_values is not None},
                 buttons=self._vbtn_state,
                 values={'throttle': self.throttle_z.x,
                         'cruise_power': CRUISE_MODE_Power if CRUISE_MODE_Power is not None else self.throttle_z.x,
                         'cruise_center': self.cruise_center,
                         'dbg': self._dpad_debug_values(left_ctr, right_ctr) if self.dpad_debug_hud else None,
-                        'trg': trg_values}
+                        'trg': trg_values, 'pnl': pnl_values}
             )
