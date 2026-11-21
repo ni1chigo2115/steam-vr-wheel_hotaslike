@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.35'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.36'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -575,7 +575,7 @@ def hud_text_panel(v):
 def hud_row_panel():
     """(0.1.31) パネルの段。'sig:panel' (プロファイルに panels がある) の間だけ出す。"""
     return {'id': 'dbg_pnl', 'on': ['sig:panel'],
-            'parts': [{'text_fn': hud_text_panel, 'reserve': 'L main>cruise sel 8   R main sel 8', 'align': 'left'}]}
+            'parts': [{'text_fn': hud_text_panel, 'reserve': 'L main/cruise sel 8   R main sel 8', 'align': 'left'}]}
 
 
 HUD_FONT_TEST = True                       # [CONFIG] フォント確認用の段を出す (確認が終わったら False)
@@ -6321,7 +6321,7 @@ class InputLayer(object):
         out = {}
         for side, mark in (('left_game', 'L'), ('right_game', 'R')):
             ps = self.panels.get(side)
-            out[mark] = '-' if ps is None else '{} sel {}'.format('>'.join(ps.stack), ps.selected or '-')
+            out[mark] = '-' if ps is None else '{} sel {}'.format('/'.join(ps.stack), ps.selected or '-')   # HUD のフォントに '>' が無い
         return out
 
     def trigger_hud_values(self):
@@ -6424,6 +6424,186 @@ class InputLayer(object):
 # ==============================================================================
 # メイン Joystick クラス
 # ==============================================================================
+# ==============================================================================
+# パネルの描画 PanelOverlay  (0.1.36、段階 4)
+# ==============================================================================
+# ■ 決まり (正本は非公開の作業メモの「01 の 3.1・3.2」)
+#   - 左右のパネルは、HUD とは別のオーバーレイ。奥行き表示 (fakefar) なしで単純に描く (01 の 3.1)。
+#     置き場所は HUD と同じ座席の空間 (TrackingUniverseSeated) で、HUD の下。位置と大きさは [CONFIG]。
+#   - 絵は PIL で描き、変わったとき (階層・選び・十字キーモード) だけ SetOverlayRaw で渡す (毎フレームは描かない)。
+#   - 配置は Q19: n 等分、1 番が真上、時計回り。境目の線の長さ・中心の円・文字までの距離は n によらず固定 (Q23)。
+#   - 選んでいる項目の扇形を薄く塗る。書いていない番号 (エラーの NONE) は赤紫、NONE と REST は薄い色 (Q25、Q29-1)。
+#   - 上に今の階層 (パンくず) を出す。オンの項目の短いバー (Q23) は、項目のオン / オフをまだ持っていないので後で。
+#   - 十字キーモードの間、右パネルは動かないので隠す (PANEL_HIDE_RIGHT_IN_POV)。
+PANEL_DRAW_ENABLED = True                  # [CONFIG] (0.1.36) パネルを描く (False = 描かない。HUD の dbg_pnl の段だけ)
+PANEL_OVERLAY_POS = {                      # [CONFIG] (0.1.36) パネルの中心 (x, y, z) [m]。HUD_PLATE_POS と同じ座席の空間。HUD の下の左右
+    'left_game': (-0.11, -0.33, -0.55),
+    'right_game': (0.15, -0.33, -0.55),
+}
+PANEL_OVERLAY_WIDTH_M = 0.16               # [CONFIG] (0.1.36) パネルの幅 [m]
+PANEL_TEX_PX = 512                         # [CONFIG] (0.1.36) パネルの絵の大きさ [px] (正方形)
+PANEL_BG = (0, 0, 0, 110)                  # [CONFIG] (0.1.36) 背景の円の色 (R, G, B, 不透明度)。None = 背景なし (01 の Q22)
+PANEL_COLOR = HUD_COLOR_GREEN              # [CONFIG] (0.1.36) 線と文字の色
+PANEL_COLOR_DIM = (130, 255, 180, 110)     # [CONFIG] (0.1.36) NONE / REST の文字の色
+PANEL_COLOR_ERROR = (255, 0, 255, 255)     # [CONFIG] (0.1.36) エラーの NONE (書いていない番号) の色 (赤紫、Q29-1)
+PANEL_COLOR_SELECT = (130, 255, 180, 70)   # [CONFIG] (0.1.36) 選んでいる扇形の塗り
+PANEL_HIDE_RIGHT_IN_POV = True             # [CONFIG] (0.1.36) 十字キーモードの間、右パネルを隠す
+
+
+def _panel_text_size(font, text):
+    """(0.1.36) 文字の幅と高さ [px]。新しい Pillow (getbbox) と古い Pillow (getsize) の両方で動く。"""
+    try:
+        b = font.getbbox(text)
+        return b[2] - b[0], b[3] - b[1]
+    except AttributeError:
+        return font.getsize(text)
+
+
+def _panel_ring(c, r, a0, a1, steps):
+    """(0.1.36) 中心 c、半径 r の円弧の点 (角度は真上 0°、時計回り [度])。"""
+    pts = []
+    for k in range(steps + 1):
+        a = math.radians(a0 + (a1 - a0) * k / float(steps))
+        pts.append((c + r * math.sin(a), c - r * math.cos(a)))
+    return pts
+
+
+def draw_panel_image(ps, fonts, size=None):
+    """(0.1.36) PanelState の今の階層を、ラジアルのパネルの絵 (PIL の RGBA) にする。"""
+    S = int(size or PANEL_TEX_PX)
+    img = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    c = S / 2.0
+    R = S * 0.44              # 外の円
+    r_in = S * 0.11           # 中心の円
+    r_lab = S * 0.29          # 文字の中心
+    lw = max(2, S // 170)
+    n = ps.slot_count()
+    w = 360.0 / n
+    if PANEL_BG is not None:
+        d.ellipse([c - R, c - R, c + R, c + R], fill=PANEL_BG)
+    if ps.selected is not None and int(ps.selected) <= n:
+        i = int(ps.selected) - 1
+        a0, a1 = i * w - w / 2.0, i * w + w / 2.0
+        d.polygon(_panel_ring(c, R, a0, a1, 24) + _panel_ring(c, r_in, a1, a0, 12), fill=PANEL_COLOR_SELECT)
+    d.line(_panel_ring(c, R, 0, 360, 96), fill=PANEL_COLOR, width=lw)
+    d.line(_panel_ring(c, r_in, 0, 360, 48), fill=PANEL_COLOR, width=lw)
+    if n > 1:
+        for i in range(n):
+            a = math.radians(i * w - w / 2.0)
+            d.line([(c + r_in * math.sin(a), c - r_in * math.cos(a)), (c + R * math.sin(a), c - R * math.cos(a))],
+                   fill=PANEL_COLOR, width=lw)
+    # 文字 (扇形の幅に収まるまで小さくする)
+    max_w = S * 0.30 if n <= 2 else min(S * 0.30, 2.0 * r_lab * math.sin(math.radians(w / 2.0)) * 0.92)
+    for i in range(n):
+        slot = str(i + 1)
+        kind = ps.slot_kind(slot)
+        row = ps.table().get(slot) or {}
+        color = PANEL_COLOR
+        if kind == 'back':
+            text = 'BACK'
+        elif kind == 'error_none':
+            text, color = 'NONE', PANEL_COLOR_ERROR
+        elif kind in ('none', 'rest'):
+            text, color = str(row.get('label', kind.upper())), PANEL_COLOR_DIM
+        else:
+            text = str(row.get('label', slot))
+        text = text.upper()
+        fs = int(S * 0.066)
+        font = fonts.get(HUD_TEXT_FONT, fs)
+        tw, th = _panel_text_size(font, text)
+        tri = fs * 0.55 if kind == 'folder' else 0.0     # フォルダの印 (▸ を描く。HUD のフォントに '>' が無いので図形で)
+        while tw + tri * 1.4 > max_w and fs > 10:
+            fs -= 2
+            font = fonts.get(HUD_TEXT_FONT, fs)
+            tw, th = _panel_text_size(font, text)
+            tri = fs * 0.55 if kind == 'folder' else 0.0
+        if n == 1:
+            x, y = c, c - (r_in + R) / 2.0
+        else:
+            a = math.radians(i * w)
+            k = 1.08 if n > 4 else 0.92                  # 項目が少ないと扇形が広いので、文字を少し内側へ
+            x, y = c + r_lab * math.sin(a) * k, c - r_lab * math.cos(a) * k
+        x0 = x - (tw + tri * 1.4) / 2.0
+        d.text((x0, y - th / 2.0 - fs * 0.15), text, font=font, fill=color)
+        if tri:
+            tx = x0 + tw + tri * 0.4
+            d.polygon([(tx, y - tri / 2.0), (tx + tri, y), (tx, y + tri / 2.0)], fill=color)
+    # 上に今の階層 (区切りは '/'。HUD のフォントに '>' が無い)
+    crumb = ' / '.join(ps.stack).upper()
+    font = fonts.get(HUD_TEXT_FONT, int(S * 0.045))
+    tw, th = _panel_text_size(font, crumb)
+    d.text((c - tw / 2.0, S * 0.005), crumb, font=font, fill=PANEL_COLOR)
+    return img
+
+
+class PanelOverlay(object):
+    """(0.1.36) パネル 1 枚のオーバーレイ。絵は SetOverlayRaw で渡す (変わったときだけ)。作れなければ何もしない。"""
+
+    def __init__(self, key, name, pos, width_m):
+        self.ok = False
+        self.handle = None
+        self.shown = False
+        self.sig = None
+        self._buf = None
+        try:
+            self.vo = openvr.IVROverlay()
+            result, h = self.vo.createOverlay(key, name)
+            if result != 0:
+                raise RuntimeError("createOverlay failed with code {}".format(result))
+            self.handle = h
+            m = openvr.HmdMatrix34_t()
+            m.m[0][0] = m.m[1][1] = m.m[2][2] = 1.0
+            m.m[0][3], m.m[1][3], m.m[2][3] = pos
+            self.vo.setOverlayWidthInMeters(h, float(width_m))
+            self.vo.function_table.setOverlayTransformAbsolute(h, openvr.TrackingUniverseSeated, openvr.byref(m))
+            try:
+                self.vo.setOverlaySortOrder(h, int(HUD_OVERLAY_SORT_ORDER) + 2)
+            except Exception:
+                pass
+            self.ok = True
+            atexit.register(self.close)
+        except Exception as e:
+            print("[Panel Warning] パネルのオーバーレイを作れません ({}): {}".format(name, e))
+
+    def show(self, img, sig):
+        if not self.ok:
+            return
+        import ctypes
+        try:
+            raw = img.tobytes()
+            self._buf = ctypes.create_string_buffer(raw, len(raw))     # 渡し終わるまで手元に持っておく
+            err = self.vo.function_table.setOverlayRaw(self.handle, ctypes.cast(self._buf, ctypes.c_void_p),
+                                                       img.size[0], img.size[1], 4)
+            if err:
+                print("[Panel Warning] setOverlayRaw error {}".format(err))
+            if not self.shown:
+                self.vo.showOverlay(self.handle)
+                self.shown = True
+            self.sig = sig
+        except Exception as e:
+            print("[Panel Warning] パネルの絵を渡せません。描くのをやめます: {}".format(e))
+            self.ok = False
+
+    def hide(self):
+        if self.ok and self.shown:
+            try:
+                self.vo.hideOverlay(self.handle)
+            except Exception:
+                pass
+        self.shown = False
+        self.sig = None
+
+    def close(self):
+        if self.handle is not None:
+            try:
+                self.vo.destroyOverlay(self.handle)
+            except Exception:
+                pass
+            self.handle = None
+            self.ok = False
+
+
 class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, VirtualPad):
     def __init__(self):
         print("=== {} ===".format(app_version_text()))
@@ -7153,6 +7333,34 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             print("[DPAD] Warning: 数値を作れませんでした: {}".format(e))
         return self._dpad_dbg_vals
 
+    def _panel_draw_frame(self):
+        """(0.1.36) 左右のパネルのオーバーレイを、パネルの今の状態に合わせる。プロファイルに無いパネルは隠す。"""
+        if not PANEL_DRAW_ENABLED:
+            return
+        if not hasattr(self, '_panel_overlays'):
+            self._panel_overlays = {}
+            self._panel_fonts = HudFonts()
+        panels = (self.inputs.panels if self.inputs is not None else None) or {}
+        for side, key, name in (('left_game', b'steam_vr_joystick_panel_left', b'Panel left'),
+                                ('right_game', b'steam_vr_joystick_panel_right', b'Panel right')):
+            ps = panels.get(side)
+            ov = self._panel_overlays.get(side)
+            hide = ps is None or (side == 'right_game' and PANEL_HIDE_RIGHT_IN_POV and self.is_pov_mode)
+            if hide:
+                if ov is not None:
+                    ov.hide()
+                continue
+            if ov is None:
+                ov = PanelOverlay(key, name, PANEL_OVERLAY_POS[side], PANEL_OVERLAY_WIDTH_M)
+                self._panel_overlays[side] = ov
+            sig = (id(ps), tuple(ps.stack), ps.selected)
+            if ov.ok and (sig != ov.sig or not ov.shown):
+                try:
+                    ov.show(draw_panel_image(ps, self._panel_fonts), sig)
+                except Exception as e:
+                    print("[Panel Warning] パネルを描けません: {}".format(e))
+                    ov.ok = False
+
     def update(self, left_ctr, right_ctr):
         self._input_frame(left_ctr, right_ctr)     # 0.1.21: 生の入力は InputLayer へ (無ければ VirtualPad.update)
 
@@ -7183,6 +7391,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 float(getattr(left_ctr, 'trackpadX', 0.0)), float(getattr(left_ctr, 'trackpadY', 0.0)),
                 float(getattr(right_ctr, 'trackpadX', 0.0)), float(getattr(right_ctr, 'trackpadY', 0.0)),
                 right_enabled=not self.is_pov_mode)                   # 0.1.33: 十字キーモードの間、右パネルは動かない
+        self._panel_draw_frame()                                      # 0.1.36: パネルを描く (変わったときだけ)
 
         thr_y, thr_z = self._left_throttle_inputs(left_ctr)
         self.throttle_z.update(thr_z)
