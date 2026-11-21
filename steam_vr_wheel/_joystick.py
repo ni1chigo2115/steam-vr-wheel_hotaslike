@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.38'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.39'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
