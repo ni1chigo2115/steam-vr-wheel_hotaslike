@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.39'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.40'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -424,10 +424,20 @@ def hud_text_cruise_power(v):
     return '{}%'.format(int(round(max(0.0, min(1.0, float(p))) * 100)))
 
 
+HUD_BMARK_TEXT = 'MNVR'                     # [CONFIG] (0.1.40) Bマークの段に出す文字 ('MNVR' 'BRAKE' など好きな文字列)。None なら元の絵 (Bmark.png)
+HUD_BMARK_BOX = True                       # [CONFIG] (0.1.40) 文字を枠で囲む (CRUISE と同じ枠)
+
+
 def hud_row_bmark():
-    """1段目: Bマーク (左コントローラーのアプリメニュー。離してから 1.5 秒残す)"""
-    return {'id': 'B', 'image': 'Bmark.png', 'on': ['sig:left_app_menu'], 'hold_sec': 1.5,
-            'space_after_px': HUD_NOTICE_ROW_HEIGHT_PX}     # SACC の BRAKE のように、下の段との間を1段分あける
+    """1段目: Bマーク (左コントローラーのアプリメニュー。離してから 1.5 秒残す)。
+    (0.1.40) HUD_BMARK_TEXT に文字があれば、絵の代わりにその文字を出す (フォントに無い字は出ない。Hornet は英大文字と数字が安全)。"""
+    row = {'id': 'B', 'on': ['sig:left_app_menu'], 'hold_sec': 1.5,
+           'space_after_px': HUD_NOTICE_ROW_HEIGHT_PX}      # SACC の BRAKE のように、下の段との間を1段分あける
+    if HUD_BMARK_TEXT:
+        row['parts'] = [{'text': str(HUD_BMARK_TEXT), 'box': bool(HUD_BMARK_BOX)}]
+    else:
+        row['image'] = 'Bmark.png'
+    return row
 
 
 def hud_row_cruise():
@@ -6519,7 +6529,7 @@ class InputLayer(object):
 #   - 配置は Q19: n 等分、1 番が真上、時計回り。境目の線の長さ・中心の円・文字までの距離は n によらず固定 (Q23)。
 #   - 選んでいる項目の扇形を薄く塗る。書いていない番号 (エラーの NONE) は赤紫、NONE と REST は薄い色 (Q25、Q29-1)。
 #   - 上に今の階層 (パンくず) を出す。オンの項目の短いバー (Q23) は、項目のオン / オフをまだ持っていないので後で。
-#   - 十字キーモードの間、右パネルは動かないので隠す (PANEL_HIDE_RIGHT_IN_POV)。
+#   - 十字キーモードの間、右パネルは動かない。隠すかは PANEL_HIDE_RIGHT_IN_POV (0.1.40 から既定は隠さない)。
 PANEL_DRAW_ENABLED = True                  # [CONFIG] (0.1.36) パネルを描く (False = 描かない。HUD の dbg_pnl の段だけ)
 PANEL_OVERLAY_POS = None                   # [CONFIG] (0.1.36) パネルの中心 {'left_game': (x, y, z), 'right_game': (x, y, z)} [m]。
                                            #          HUD_PLATE_POS と同じ座席の空間。None = HUD の窓の下の端から自動 (0.1.37)
@@ -6532,7 +6542,9 @@ PANEL_COLOR = HUD_COLOR_GREEN              # [CONFIG] (0.1.36) 線と文字の�
 PANEL_COLOR_DIM = (130, 255, 180, 110)     # [CONFIG] (0.1.36) NONE / REST の文字の色
 PANEL_COLOR_ERROR = (255, 0, 255, 255)     # [CONFIG] (0.1.36) エラーの NONE (書いていない番号) の色 (赤紫、Q29-1)
 PANEL_COLOR_SELECT = (130, 255, 180, 70)   # [CONFIG] (0.1.36) 選んでいる扇形の塗り
-PANEL_HIDE_RIGHT_IN_POV = True             # [CONFIG] (0.1.36) 十字キーモードの間、右パネルを隠す
+POV_MODE_NEEDS_EXTRA_TOUCH = True          # [CONFIG] (0.1.40) 十字キーモードに入るのは「左スティックのタッチ + POV_MODE_EXTRA_TOUCH_IDS のタッチ」のときだけ。False = 0.1.39 までと同じ (スティックのタッチかアプリメニューだけで入る)
+POV_MODE_EXTRA_TOUCH_IDS = [7]             # [CONFIG] (0.1.40) 一緒に触れているボタンの番号 (openvr の EVRButtonId)。7 = k_EButton_A = Oculus Touch の左 X ボタン
+PANEL_HIDE_RIGHT_IN_POV = False            # [CONFIG] (0.1.36) 十字キーモードの間、右パネルを隠す (0.1.40: 既定は隠さない。にいちごさんの決定)
 
 
 def _panel_text_size(font, text):
@@ -6965,12 +6977,18 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             self.device._sdk.SetContPov(int(value), self.device.rID, int(pov_id))
 
     def _update_pad_and_pov(self, left_ctr, right_ctr):
-        povtouchfind = (
-            self.left_app_menu_pressed
-            or (openvr.k_EButton_ApplicationMenu in self.left_touched_buttons)
-            or self.left_touchpad_touched
-            or any(self._is_left_touched(i) for i in self.pov_touch_ids)
-        )
+        if POV_MODE_NEEDS_EXTRA_TOUCH:
+            # (0.1.40) 左スティックのタッチ + X ボタンのタッチ の両方で十字キーモード (スティックのタッチだけでは入らない)
+            stick_touch = self.left_touchpad_touched or any(self._is_left_touched(i) for i in self.pov_touch_ids)
+            extra_touch = any(self._is_left_touched(i) for i in POV_MODE_EXTRA_TOUCH_IDS)
+            povtouchfind = bool(stick_touch and extra_touch)
+        else:
+            povtouchfind = (
+                self.left_app_menu_pressed
+                or (openvr.k_EButton_ApplicationMenu in self.left_touched_buttons)
+                or self.left_touchpad_touched
+                or any(self._is_left_touched(i) for i in self.pov_touch_ids)
+            )
 
         is_pov_mode = (povtouchfind != self.joysticknotouchpov)
         self.is_pov_mode = is_pov_mode
