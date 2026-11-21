@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.32'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.33'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -5863,6 +5863,7 @@ class PanelState(object):
         if len(self.stack) > 1:                       # 下の階層
             if slot == PANEL_BACK_SLOT:
                 self.stack.pop()
+                self.selected = None            # 0.1.33: 階層が変わったら選びを消す
                 return ('back', None)
             if slot == PANEL_NEXT_SLOT:
                 return ('next', None)
@@ -5872,6 +5873,7 @@ class PanelState(object):
         target = row.get('folder')
         if target is not None:
             self.stack.append(str(target))
+            self.selected = None                # 0.1.33: 階層が変わったら選びを消す
             return ('enter', str(target))
         return ('item', row)
 
@@ -6036,7 +6038,7 @@ _ZONE_BUTTONS = {'left': [4, 5, 6, 7, 8], 'right': [12, 13, 14, 15, 16]}   # Vir
 
 class InputLayer(object):
     """生の入力 → 名前つきの入力 → 割り当て → 命令 → バス (上の説明を参照)。owner は Joystick (config と区画の計算に使う)。"""
-    COMMANDS = ['vjoy_button', 'vjoy_zone_button', 'vjoy_axis', 'vjoy_dpad']   # 命令の一覧 (中身は _cmd_<名前>)
+    COMMANDS = ['vjoy_button', 'vjoy_zone_button', 'vjoy_axis', 'vjoy_dpad', 'panel_execute']   # 命令の一覧 (中身は _cmd_<名前>)
 
     def __init__(self, owner, bus, bindings=None, profile=None):
         """bindings = 割り当ての一覧 (無ければ profile、それも無ければコードの既定)。profile = load_input_profile() の結果か None。"""
@@ -6141,7 +6143,7 @@ class InputLayer(object):
         ts = self.triggers[hand]
         old_zone = ts.zone_text()
         was_half, was_full = ts.half_on, ts.full_on
-        half_assigned = n_half in self._bind or self.trigger_test >= 2
+        half_assigned = self._half_assigned(n_half) or self.trigger_test >= 2     # 0.1.33: パネルの選びで変わる
         ts.update(value, half_assigned, n_full in self._bind or self.trigger_test >= 1, self.thresholds,
                   self.trigger_mode, time.time(), self.trigger_half_delay)
         if self.trigger_test and ts.zone_text() != old_zone:
@@ -6152,20 +6154,73 @@ class InputLayer(object):
         self.set(n_half, ts.half_on)
         self.set(n_full, ts.full_on)
 
-    def update_panel_selection(self, lx, ly, rx, ry):
-        """(0.1.32) 左右のスティックの倒し方で、各パネルの選ぶスロットを決める (実行はまだしない)。
-        倒し量が足りなければ選びを変えない (選んだ項目は残る)。変わったときだけ [Panel] の行を出す。"""
+    def update_panel_selection(self, lx, ly, rx, ry, right_enabled=True):
+        """(0.1.32) 左右のスティックの倒し方で、各パネルの選ぶスロットを決める。
+        倒し量が足りなければ選びを変えない (選んだ項目は残る)。変わったときだけ [Panel] の行を出す。
+        (0.1.33) 右パネルは right_enabled (十字キーモードでない) のときだけ動く (01 の 3.1)。
+        右の項目で exec が 'trigger' でないもの (既定 'tilt') は、倒した時点で実行する。
+        一度中央 (遊びの中) に戻してから同じ向きに倒すと、同じ項目をもう一度実行する。"""
         if not self.panels:
             return
-        for side, x, y in (('left_game', lx, ly), ('right_game', rx, ry)):
+        if not hasattr(self, '_panel_stick_out'):
+            self._panel_stick_out = {}
+        for side, x, y, on in (('left_game', lx, ly, True), ('right_game', rx, ry, right_enabled)):
             ps = self.panels.get(side)
             if ps is None:
                 continue
-            slot = panel_slot_from_stick(x, y, ps.slot_count())
-            if slot is None or slot == ps.selected:
+            slot = panel_slot_from_stick(x, y, ps.slot_count()) if on else None
+            if slot is None:
+                self._panel_stick_out[side] = False
                 continue
-            ps.select(slot)
-            print("[Panel] {}: 選ぶ {}".format(side, slot))
+            if self._panel_stick_out.get(side) and slot == ps.selected:
+                continue
+            self._panel_stick_out[side] = True
+            if slot != ps.selected:
+                ps.select(slot)
+                print("[Panel] {}: 選ぶ {}".format(side, slot))
+            if side == 'right_game' and not self._panel_waits_trigger(side):
+                self._panel_run(side, 'tilt')
+
+    def _panel_waits_trigger(self, side):
+        """(0.1.33) そのパネルで今、トリガーで実行する項目を選んでいるか。
+        左は項目を選んでいればいつも (左 GAME パネルは全部トリガーで実行)。右は項目の exec が 'trigger' のときだけ。
+        下の階層の 1 (戻る) と 8 (次へ) は、左ではトリガー待ち。"""
+        ps = (self.panels or {}).get(side)
+        if ps is None or ps.selected is None:
+            return False
+        if side == 'left_game' and len(ps.stack) > 1 and ps.selected in (PANEL_BACK_SLOT, PANEL_NEXT_SLOT):
+            return True
+        row = ps.table().get(ps.selected)
+        if row is None:
+            return False
+        if side == 'left_game':
+            return True
+        return row.get('exec', 'tilt') == 'trigger'
+
+    def _half_assigned(self, n_half):
+        """(0.1.33) 半押しに割り当てがあるか (トリガーのロック用)。panel_execute だけの割り当ては、そのパネルで
+        今トリガーで実行する項目を選んでいるときだけ「ある」とみなす。選んでいなければ、引き切り (GUN など) が出る。"""
+        for cmd, args in self._bind.get(n_half, ()):
+            if cmd != 'panel_execute' or self._panel_waits_trigger(args.get('panel', 'left_game')):
+                return True
+        return False
+
+    def _panel_run(self, side, how):
+        """(0.1.33) パネルで選んでいる項目を実行して、結果を [Panel] の行に出す。how = 'trigger' / 'tilt'。
+        項目の中身 (ゲームへ何を出すか) はまだ決めていないので、段階 2 では行に出すだけ。"""
+        ps = self.panels[side]
+        slot = ps.selected
+        kind, what = ps.execute()
+        if kind == 'item':
+            print("[Panel] {}: 実行 {} {} ({})".format(side, slot, what.get('label', what), how))
+        elif kind == 'enter':
+            print("[Panel] {}: {} でフォルダ '{}' に入る".format(side, slot, what))
+        elif kind == 'back':
+            print("[Panel] {}: 戻る (今 '{}')".format(side, ps.stack[-1]))
+        elif kind == 'next':
+            print("[Panel] {}: 次へ (まだ作っていません)".format(side))
+        else:
+            print("[Panel] {}: 何もしない (選び {})".format(side, slot or '-'))
 
     def panel_hud_values(self):
         """(0.1.31) HUD の段用: 左右のパネルの今の階層と選んでいるスロット。panels が無ければ None。"""
@@ -6214,6 +6269,19 @@ class InputLayer(object):
             if need and not getattr(self.owner.config, need):
                 return
         self.bus.set_button(args['button'], bool(value), 'in:' + name)
+
+    def _cmd_panel_execute(self, name, value, args):
+        """(0.1.33) 命令 'panel_execute': 入力が成り立ったとき、args['panel'] のパネルで選んでいる項目を実行する。
+        トリガー待ちの項目 (左は全部、右は exec が 'trigger') だけ。それ以外を選んでいるときは何もしない
+        (そのときはロックの決まりで、この入力は割り当てが無いとみなされ、引き切りの割り当てが出る)。"""
+        if not value:
+            return
+        side = args.get('panel', 'left_game')
+        if side not in (self.panels or {}):
+            print("[Panel] {} がプロファイルに無いので実行できません ({})".format(side, name))
+            return
+        if self._panel_waits_trigger(side):
+            self._panel_run(side, 'trigger')
 
     def _cmd_vjoy_zone_button(self, name, value, args):
         hand = args['hand']
@@ -7016,7 +7084,8 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         if self.inputs is not None:                                   # 0.1.32: スティックで選ぶスロット (パネル)
             self.inputs.update_panel_selection(
                 float(getattr(left_ctr, 'trackpadX', 0.0)), float(getattr(left_ctr, 'trackpadY', 0.0)),
-                float(getattr(right_ctr, 'trackpadX', 0.0)), float(getattr(right_ctr, 'trackpadY', 0.0)))
+                float(getattr(right_ctr, 'trackpadX', 0.0)), float(getattr(right_ctr, 'trackpadY', 0.0)),
+                right_enabled=not self.is_pov_mode)                   # 0.1.33: 十字キーモードの間、右パネルは動かない
 
         thr_y, thr_z = self._left_throttle_inputs(left_ctr)
         self.throttle_z.update(thr_z)

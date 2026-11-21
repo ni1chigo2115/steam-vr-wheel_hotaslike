@@ -4,12 +4,15 @@
   "profile": {
     "id": "test_panels",
     "name": "テスト: パネルの階層 (段階 1、画面には出ません)",
-    "note": "割り当ては既定と同じ。panels を読むかだけを確かめる。左 GAME はフォルダ cruise に入れる"
+    "note": "割り当ては既定に、左右の半押し = パネルの実行を足したもの。左はトリガーで実行。右は倒した時点で実行、GEAR (5) だけ右トリガーで実行。警告 2 行はわざと"
   },
   "settings": {},
   "input": {
     "base": "default",
-    "bindings": []
+    "bindings": [
+      {"input": "left.trigger_half", "command": "panel_execute", "args": {"panel": "left_game"}},
+      {"input": "right.trigger_half", "command": "panel_execute", "args": {"panel": "right_game"}}
+    ]
   },
   "panels": {
     "left_game": {
@@ -30,7 +33,7 @@
     "right_game": {
       "items": {
         "1": {"label": "MISSILE", "button": 9},
-        "5": {"label": "GEAR", "trigger_mode": "select"}
+        "5": {"label": "GEAR", "exec": "trigger"}
       }
     }
   }
