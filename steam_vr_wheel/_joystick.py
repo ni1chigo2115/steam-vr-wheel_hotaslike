@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.36'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.37'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -4840,8 +4840,78 @@ class HudPlateOverlay(object):
         except Exception:
             pass
 
+    # ---------------------------------------------------------------- (0.1.37) パネル (段階 4)
+    # パネルの絵は主スレッドが PIL で描き、panel_request で渡す。描画スレッド (GL の文脈を持つ側) が次の描画のときに
+    # GL のテクスチャに上げ、HUD と同じ setOverlayTexture で渡す。届いたときだけ上げる (毎フレームは何もしない)。
+    # 0.1.36 の SetOverlayRaw は途中から error 23 (RequestFailed) を返し続けたので、HUD と同じ仕組みにそろえた。
+    def panel_request(self, side, img, pos=None, width_m=None):
+        """主スレッドから: パネルの絵 (PIL の RGBA) を渡す。img = None で隠す。"""
+        with self._lock:
+            if getattr(self, '_panel_req', None) is None:
+                self._panel_req = {}
+            self._panel_req[side] = (img, pos, width_m)
+
+    def _panel_flush(self):
+        """描画スレッドで: 届いたパネルの絵を GL のテクスチャに上げて渡す。テクスチャの大きさはパネルごとに同じ。"""
+        req = getattr(self, '_panel_req', None)
+        if not req:
+            return
+        with self._lock:
+            items = list(req.items())
+            req.clear()
+        if getattr(self, '_panels', None) is None:
+            self._panels = {}
+        for side, (img, pos, width_m) in items:
+            p = self._panels.get(side)
+            try:
+                if img is None:
+                    if p is not None and p['shown']:
+                        self.vroverlay.hideOverlay(p['h'])
+                        p['shown'] = False
+                    continue
+                if p is None:
+                    key = ('steam_vr_joystick_panel_' + side).encode('ascii')
+                    result, h = self.vroverlay.createOverlay(key, key)
+                    if result != 0:
+                        raise RuntimeError("createOverlay failed with code {}".format(result))
+                    tex = self._gfx.new_texture(img.size[0], img.size[1])
+                    ts = openvr.Texture_t()
+                    ts.handle = int(tex)
+                    ts.eType = self._gfx.texture_type
+                    ts.eColorSpace = openvr.ColorSpace_Auto
+                    p = {'h': h, 'tex': tex, 'ts': ts, 'shown': False, 'place': None, 'size': img.size}
+                    self._panels[side] = p
+                    self._set_sort_order(h, int(HUD_OVERLAY_SORT_ORDER) + 2)
+                if img.size != p['size']:
+                    img = img.resize(p['size'])
+                if pos is not None and (pos, width_m) != p['place']:
+                    self._place_one(p['h'], pos, width_m)
+                    p['place'] = (pos, width_m)
+                self._gfx.upload(p['tex'], img, 0, 0, p['size'][1])
+                err = self._gfx.submit(self._fn_texture, p['h'], p['ts'])
+                if err:
+                    print("[Panel Warning] パネル {} の setOverlayTexture error {}".format(side, err))
+                if not p['shown']:
+                    self.vroverlay.showOverlay(p['h'])
+                    p['shown'] = True
+            except Exception as e:
+                print("[Panel Warning] パネル {} を描けません: {}: {}".format(side, type(e).__name__, e))
+
+    def _panel_close(self):
+        for p in (getattr(self, '_panels', None) or {}).values():
+            try:
+                self.vroverlay.destroyOverlay(p['h'])
+            except Exception:
+                pass
+            try:
+                self._gfx.delete_texture(p['tex'])
+            except Exception:
+                pass
+        self._panels = {}
+
     def _apply(self, args, force=False):
         """1回分の描画 (どちらのスレッドからでも同じ)。"""
+        self._panel_flush()                    # 0.1.37: パネルの絵が届いていれば上げる
         (throttle_val, pitch_val, roll_val, yaw_val, bmark_pressed, cece27_toggle, pov_mode,
          signals, buttons, values) = args
         now = time.time()
@@ -4994,6 +5064,7 @@ class HudPlateOverlay(object):
                 gfx = self._gfx
                 try:
                     gfx.make_current()
+                    self._panel_close()                # 0.1.37
                     for out in list(getattr(self, '_outs', ())):
                         gfx.delete_output(out)
                     for t in (self._tex, self._tex_edge):
@@ -6270,14 +6341,17 @@ class InputLayer(object):
             return
         args = dict(row.get('args') or {})
         name = 'panel.{}.{}'.format(side, slot)
-        try:
-            getattr(self, '_cmd_' + cmd)(name, True, args)
-        except Exception as e:
-            print("[Panel] Warning: {} の {} を実行できません: {}".format(side, slot, e))
-            return
+        # (0.1.37) "buttons": [a, b] = 同時押し (MNVR がゲームによっては 2 つのボタンの同時押しなので)
+        many = [dict(args, button=b) for b in args['buttons']] if isinstance(args.get('buttons'), list) else [args]
         if not hasattr(self, '_panel_releases'):
             self._panel_releases = []
-        self._panel_releases.append((time.time() + PANEL_PRESS_SEC, cmd, name, args))
+        for a in many:
+            try:
+                getattr(self, '_cmd_' + cmd)(name, True, a)
+            except Exception as e:
+                print("[Panel] Warning: {} の {} を実行できません: {}".format(side, slot, e))
+                continue
+            self._panel_releases.append((time.time() + PANEL_PRESS_SEC, cmd, name, a))
 
     def _panel_release_due(self):
         """(0.1.34) 押す時間が過ぎた項目のボタンを離す (毎フレーム、update_panel_selection から)。"""
@@ -6429,17 +6503,19 @@ class InputLayer(object):
 # ==============================================================================
 # ■ 決まり (正本は非公開の作業メモの「01 の 3.1・3.2」)
 #   - 左右のパネルは、HUD とは別のオーバーレイ。奥行き表示 (fakefar) なしで単純に描く (01 の 3.1)。
-#     置き場所は HUD と同じ座席の空間 (TrackingUniverseSeated) で、HUD の下。位置と大きさは [CONFIG]。
-#   - 絵は PIL で描き、変わったとき (階層・選び・十字キーモード) だけ SetOverlayRaw で渡す (毎フレームは描かない)。
+#     置き場所は HUD と同じ座席の空間 (TrackingUniverseSeated) で、HUD の窓の下 (自動)。位置と大きさは [CONFIG]。
+#   - 絵は主スレッドが PIL で描き、変わったとき (階層・選び・十字キーモード・位置) だけ HUD に渡す。
+#     (0.1.37) HUD の描画スレッドが GL のテクスチャに上げて setOverlayTexture で渡す (HudPlateOverlay.panel_request)。
+#     HUD が無いとき (HUD を作れなかったとき) はパネルも出ない。
 #   - 配置は Q19: n 等分、1 番が真上、時計回り。境目の線の長さ・中心の円・文字までの距離は n によらず固定 (Q23)。
 #   - 選んでいる項目の扇形を薄く塗る。書いていない番号 (エラーの NONE) は赤紫、NONE と REST は薄い色 (Q25、Q29-1)。
 #   - 上に今の階層 (パンくず) を出す。オンの項目の短いバー (Q23) は、項目のオン / オフをまだ持っていないので後で。
 #   - 十字キーモードの間、右パネルは動かないので隠す (PANEL_HIDE_RIGHT_IN_POV)。
 PANEL_DRAW_ENABLED = True                  # [CONFIG] (0.1.36) パネルを描く (False = 描かない。HUD の dbg_pnl の段だけ)
-PANEL_OVERLAY_POS = {                      # [CONFIG] (0.1.36) パネルの中心 (x, y, z) [m]。HUD_PLATE_POS と同じ座席の空間。HUD の下の左右
-    'left_game': (-0.11, -0.33, -0.55),
-    'right_game': (0.15, -0.33, -0.55),
-}
+PANEL_OVERLAY_POS = None                   # [CONFIG] (0.1.36) パネルの中心 {'left_game': (x, y, z), 'right_game': (x, y, z)} [m]。
+                                           #          HUD_PLATE_POS と同じ座席の空間。None = HUD の窓の下の端から自動 (0.1.37)
+PANEL_BELOW_HUD_GAP_M = 0.02               # [CONFIG] (0.1.37) 自動の位置: HUD の窓の下の端とパネルの上の端の間 [m]
+PANEL_SIDE_OFFSET_M = 0.10                 # [CONFIG] (0.1.37) 自動の位置: HUD の窓の中心から左右のパネルの中心までの横の距離 [m]
 PANEL_OVERLAY_WIDTH_M = 0.16               # [CONFIG] (0.1.36) パネルの幅 [m]
 PANEL_TEX_PX = 512                         # [CONFIG] (0.1.36) パネルの絵の大きさ [px] (正方形)
 PANEL_BG = (0, 0, 0, 110)                  # [CONFIG] (0.1.36) 背景の円の色 (R, G, B, 不透明度)。None = 背景なし (01 の Q22)
@@ -6535,73 +6611,6 @@ def draw_panel_image(ps, fonts, size=None):
     tw, th = _panel_text_size(font, crumb)
     d.text((c - tw / 2.0, S * 0.005), crumb, font=font, fill=PANEL_COLOR)
     return img
-
-
-class PanelOverlay(object):
-    """(0.1.36) パネル 1 枚のオーバーレイ。絵は SetOverlayRaw で渡す (変わったときだけ)。作れなければ何もしない。"""
-
-    def __init__(self, key, name, pos, width_m):
-        self.ok = False
-        self.handle = None
-        self.shown = False
-        self.sig = None
-        self._buf = None
-        try:
-            self.vo = openvr.IVROverlay()
-            result, h = self.vo.createOverlay(key, name)
-            if result != 0:
-                raise RuntimeError("createOverlay failed with code {}".format(result))
-            self.handle = h
-            m = openvr.HmdMatrix34_t()
-            m.m[0][0] = m.m[1][1] = m.m[2][2] = 1.0
-            m.m[0][3], m.m[1][3], m.m[2][3] = pos
-            self.vo.setOverlayWidthInMeters(h, float(width_m))
-            self.vo.function_table.setOverlayTransformAbsolute(h, openvr.TrackingUniverseSeated, openvr.byref(m))
-            try:
-                self.vo.setOverlaySortOrder(h, int(HUD_OVERLAY_SORT_ORDER) + 2)
-            except Exception:
-                pass
-            self.ok = True
-            atexit.register(self.close)
-        except Exception as e:
-            print("[Panel Warning] パネルのオーバーレイを作れません ({}): {}".format(name, e))
-
-    def show(self, img, sig):
-        if not self.ok:
-            return
-        import ctypes
-        try:
-            raw = img.tobytes()
-            self._buf = ctypes.create_string_buffer(raw, len(raw))     # 渡し終わるまで手元に持っておく
-            err = self.vo.function_table.setOverlayRaw(self.handle, ctypes.cast(self._buf, ctypes.c_void_p),
-                                                       img.size[0], img.size[1], 4)
-            if err:
-                print("[Panel Warning] setOverlayRaw error {}".format(err))
-            if not self.shown:
-                self.vo.showOverlay(self.handle)
-                self.shown = True
-            self.sig = sig
-        except Exception as e:
-            print("[Panel Warning] パネルの絵を渡せません。描くのをやめます: {}".format(e))
-            self.ok = False
-
-    def hide(self):
-        if self.ok and self.shown:
-            try:
-                self.vo.hideOverlay(self.handle)
-            except Exception:
-                pass
-        self.shown = False
-        self.sig = None
-
-    def close(self):
-        if self.handle is not None:
-            try:
-                self.vo.destroyOverlay(self.handle)
-            except Exception:
-                pass
-            self.handle = None
-            self.ok = False
 
 
 class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, VirtualPad):
@@ -7333,33 +7342,43 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             print("[DPAD] Warning: 数値を作れませんでした: {}".format(e))
         return self._dpad_dbg_vals
 
+    def _panel_pos(self, side):
+        """(0.1.37) パネルの中心の位置 [m]。PANEL_OVERLAY_POS が無ければ、HUD の窓の下の端から決める。"""
+        if PANEL_OVERLAY_POS:
+            return tuple(PANEL_OVERLAY_POS[side])
+        cx, cy, cz = self.hud.plate_center()
+        bottom = cy - self.hud.plate_h * self.hud.mpp / 2.0
+        y = bottom - float(PANEL_BELOW_HUD_GAP_M) - float(PANEL_OVERLAY_WIDTH_M) / 2.0
+        dx = float(PANEL_SIDE_OFFSET_M)
+        return (cx - dx if side == 'left_game' else cx + dx, y, cz)
+
     def _panel_draw_frame(self):
-        """(0.1.36) 左右のパネルのオーバーレイを、パネルの今の状態に合わせる。プロファイルに無いパネルは隠す。"""
-        if not PANEL_DRAW_ENABLED:
+        """(0.1.36) 左右のパネルを、パネルの今の状態に合わせる。プロファイルに無いパネルは隠す。
+        (0.1.37) 絵は PIL で描いて HUD に渡す (HUD の描画スレッドが GL のテクスチャに上げる)。変わったときだけ。"""
+        if not PANEL_DRAW_ENABLED or self.hud is None or not getattr(self.hud, 'initialized', False):
             return
-        if not hasattr(self, '_panel_overlays'):
-            self._panel_overlays = {}
+        if not hasattr(self, '_panel_sent'):
+            self._panel_sent = {}
             self._panel_fonts = HudFonts()
         panels = (self.inputs.panels if self.inputs is not None else None) or {}
-        for side, key, name in (('left_game', b'steam_vr_joystick_panel_left', b'Panel left'),
-                                ('right_game', b'steam_vr_joystick_panel_right', b'Panel right')):
+        for side in ('left_game', 'right_game'):
             ps = panels.get(side)
-            ov = self._panel_overlays.get(side)
             hide = ps is None or (side == 'right_game' and PANEL_HIDE_RIGHT_IN_POV and self.is_pov_mode)
             if hide:
-                if ov is not None:
-                    ov.hide()
+                if self._panel_sent.get(side) is not None:
+                    self.hud.panel_request(side, None)
+                    self._panel_sent[side] = None
                 continue
-            if ov is None:
-                ov = PanelOverlay(key, name, PANEL_OVERLAY_POS[side], PANEL_OVERLAY_WIDTH_M)
-                self._panel_overlays[side] = ov
-            sig = (id(ps), tuple(ps.stack), ps.selected)
-            if ov.ok and (sig != ov.sig or not ov.shown):
-                try:
-                    ov.show(draw_panel_image(ps, self._panel_fonts), sig)
-                except Exception as e:
-                    print("[Panel Warning] パネルを描けません: {}".format(e))
-                    ov.ok = False
+            try:
+                pos = self._panel_pos(side)
+                sig = (id(ps), tuple(ps.stack), ps.selected, pos)
+                if sig == self._panel_sent.get(side):
+                    continue
+                self.hud.panel_request(side, draw_panel_image(ps, self._panel_fonts), pos, PANEL_OVERLAY_WIDTH_M)
+                self._panel_sent[side] = sig
+            except Exception as e:
+                print("[Panel Warning] パネル {} を描けません: {}: {}".format(side, type(e).__name__, e))
+                self._panel_sent[side] = 'error'
 
     def update(self, left_ctr, right_ctr):
         self._input_frame(left_ctr, right_ctr)     # 0.1.21: 生の入力は InputLayer へ (無ければ VirtualPad.update)

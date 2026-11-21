@@ -4,7 +4,7 @@
   "profile": {
     "id": "test_panels",
     "name": "テスト: パネル (01 の既定の並び)",
-    "note": "左は 01 の 3.2 の動作テスト用の並び、右は 3.1 の AC8 風の一例。ボタンは確かめ用の仮の番号 (19〜22)。ボタンの無い項目はコンソールに出るだけ。警告 2 行 ('0' と cruise の '1') はわざと"
+    "note": "左は 01 の 3.2 の動作テスト用の並び、右は 3.1 の AC8 風の一例。ボタンは確かめ用の仮の番号 (19〜23)。MNVR は 1 ボタンの仮 (同時押しは args の buttons に番号を並べる)。ボタンの無い項目はコンソールに出るだけ。警告 2 行 ('0' と cruise の '1') はわざと"
   },
   "settings": {},
   "input": {
@@ -25,7 +25,7 @@
           "3": {"label": "BRAKE"},
           "4": {"label": "REST", "type": "REST"},
           "5": {"label": "CRUISE", "folder": "cruise"},
-          "6": {"label": "MNVR"},
+          "6": {"label": "MNVR", "command": "vjoy_button", "args": {"button": 23}},
           "7": {"label": "NONE", "type": "NONE"},
           "8": {"label": "CONFIG"}
         },
