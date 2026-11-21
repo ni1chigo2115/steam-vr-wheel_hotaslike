@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.34'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.35'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -5736,14 +5736,17 @@ def list_input_profiles():
 #   - プロファイルの "panels": {"left_game": {"root", "folders"}, "right_game": {"items"}}。どちらも無くてもよい。
 #   - スロットのキーは文字列 "1"〜"8"。"0" は中央 (何もしない) なので、書かれていたら警告して捨てる。
 #   - 下の階層 (ルート以外のフォルダ) の "1" は「戻る」の予約。書かれていたら警告して捨てる。
-#     下の階層の "8" は「次へ」(3.2)。段階 1 では名前 ('next') を返すだけで、次の階層は作らない。
+#     (0.1.35) ゲームパネルの "8" は普通の項目。「8 = 次へ」の自動の階層はメニューパネルだけの決まり (01 の 3.2、段階 3)。
+#   - (0.1.35) 項目の数 n = 書いた項目の数 (下の階層は「戻る」の 1 を足す)。360/n の扇形の 1〜n 番が選べる (Q19)。
+#     n より大きい番号は届かないので警告する。1〜n の中で書いていない番号は「エラーの NONE」(選べない、01 の 3.1)。
+#   - (0.1.35) 項目の "type": "NONE" = 選べない / "REST" = 選べるが何もしない (Q25)。書かなければ普通の項目。
+#   - (0.1.35) 項目の "block_a": true = その項目を選んでいる間、そのパネルの側の A ボタンをゲームへ出さない (Q31、GEAR など)。
 #   - 右パネルには階層が無い。フォルダを書いたら警告して捨て、項目は "items" の 1 つの表だけ。
 #   - "folder" は、そのスロットを実行したときに入るフォルダの名前。無い名前・循環は警告して、その行を捨てる。
 #   - PanelState が持つのは、今いる階層の道 (stack) と選んでいるスロット (selected) だけ。
 #     プロファイルを切り替えると InputLayer ごと作り直すので、階層はルートから始まる (3.3)。
 PANEL_SLOTS = ('1', '2', '3', '4', '5', '6', '7', '8')
 PANEL_BACK_SLOT = '1'     # 下の階層で「戻る」
-PANEL_NEXT_SLOT = '8'     # 下の階層で「次へ」(段階 1 は名前だけ)
 
 
 def _check_panel_folders(root, folders):
@@ -5807,6 +5810,11 @@ def _read_panel_side(side, is_left):
                 print("[Panel] Warning: 右パネルの項目にフォルダは書けません (スロット '{}')。'folder' を捨てます".format(slot))
                 row = dict((k, v) for k, v in row.items() if k != 'folder')
             rows[slot] = row
+        n = len(rows) + (0 if fname == root else 1)
+        for slot in sorted(rows.keys()):
+            if int(slot) > n:
+                print("[Panel] Warning: フォルダ '{}' の '{}' は届きません (項目は {} 個なので 1〜{} 番だけ選べる。空きは NONE で埋める)".format(
+                    fname, slot, n, n))
         folders[fname] = rows
     _check_panel_folders(root, folders)
     return {'root': root, 'folders': folders}
@@ -5832,7 +5840,7 @@ class PanelState(object):
       ('item', 項目)    項目を実行する (中身は JSON の項目の dict)
       ('enter', 名前)   フォルダに入った (stack を進めた)
       ('back', None)    1 つ上の階層へ戻った (stack を戻した)
-      ('next', None)    「次へ」(段階 1 は名前だけ。階層は変えない)
+      ('rest', None)    REST (選べるが何もしない)
     """
 
     def __init__(self, side_name, defs):
@@ -5846,9 +5854,26 @@ class PanelState(object):
         return self.folders.get(self.stack[-1], {})
 
     def slot_count(self):
-        """(0.1.32) 今の階層の項目の数 (扇形の数 n)。今の階層で一番大きいスロットの番号。空の階層は 1。"""
-        keys = [int(s) for s in self.table().keys()]
-        return max(keys) if keys else 1
+        """(0.1.35) 今の階層の項目の数 (扇形の数 n) = 書いた項目の数。下の階層は「戻る」の 1 を足す (01 の Q19)。"""
+        n = len(self.table()) + (1 if len(self.stack) > 1 else 0)
+        return max(1, min(8, n))
+
+    def slot_kind(self, slot):
+        """(0.1.35) スロットの種類: 'back' / 'error_none' (書いていない) / 'none' / 'rest' / 'folder' / 'item'。"""
+        if len(self.stack) > 1 and slot == PANEL_BACK_SLOT:
+            return 'back'
+        row = self.table().get(slot)
+        if row is None:
+            return 'error_none'
+        t = str(row.get('type', '')).upper()
+        if t == 'NONE':
+            return 'none'
+        if t == 'REST':
+            return 'rest'
+        return 'folder' if row.get('folder') is not None else 'item'
+
+    def selectable(self, slot):
+        return self.slot_kind(slot) not in ('error_none', 'none')
 
     def select(self, slot):
         """スロットを選ぶ。'0' と知らないスロットは、選んでいない扱いにする。"""
@@ -5860,16 +5885,16 @@ class PanelState(object):
         slot = self.selected
         if slot is None:
             return ('none', None)
-        if len(self.stack) > 1:                       # 下の階層
-            if slot == PANEL_BACK_SLOT:
-                self.stack.pop()
-                self.selected = None            # 0.1.33: 階層が変わったら選びを消す
-                return ('back', None)
-            if slot == PANEL_NEXT_SLOT:
-                return ('next', None)
-        row = self.table().get(slot)
-        if row is None:
+        kind = self.slot_kind(slot)
+        if kind == 'back':
+            self.stack.pop()
+            self.selected = None            # 0.1.33: 階層が変わったら選びを消す
+            return ('back', None)
+        if kind in ('error_none', 'none'):
             return ('none', None)
+        if kind == 'rest':
+            return ('rest', None)
+        row = self.table().get(slot)
         target = row.get('folder')
         if target is not None:
             self.stack.append(str(target))
@@ -5889,7 +5914,8 @@ def build_panel_states(profile):
     return out
 
 
-PANEL_STICK_DEADZONE = 0.6   # [CONFIG] (0.1.30) 倒した量 (0〜1) がこれ未満なら、選びを変えない (選んだ項目は残る)
+PANEL_STICK_DEADZONE = 0.60  # [CONFIG] (0.1.30) 倒した量 (0〜1) がこれ以上になったら選ぶ (それ未満では選びを変えない。選んだ項目は残る)
+PANEL_STICK_RELEASE = 0.45   # [CONFIG] (0.1.35) 一度倒したあと、これ未満に戻るまでは倒したままとみなす (01 の Q19、VirtualDPad と同じ)
 PANEL_PRESS_SEC = 0.10       # [CONFIG] (0.1.34) パネルの項目でボタンを出すとき、押している時間 [秒]
 PANEL_ITEM_COMMANDS = ('vjoy_button',)   # (0.1.34) パネルの項目に書ける命令 (項目の中身は作りながら増やす)
 
@@ -6171,7 +6197,12 @@ class InputLayer(object):
             ps = self.panels.get(side)
             if ps is None:
                 continue
-            slot = panel_slot_from_stick(x, y, ps.slot_count()) if on else None
+            dz = PANEL_STICK_RELEASE if self._panel_stick_out.get(side) else PANEL_STICK_DEADZONE   # 0.1.35
+            slot = panel_slot_from_stick(x, y, ps.slot_count(), dz) if on else None
+            if slot is not None and not ps.selectable(slot):
+                slot = None if not self._panel_stick_out.get(side) else ps.selected   # NONE は選べない (選びはそのまま)
+                if slot is None:
+                    continue
             if slot is None:
                 self._panel_stick_out[side] = False
                 continue
@@ -6187,18 +6218,37 @@ class InputLayer(object):
     def _panel_waits_trigger(self, side):
         """(0.1.33) そのパネルで今、トリガーで実行する項目を選んでいるか。
         左は項目を選んでいればいつも (左 GAME パネルは全部トリガーで実行)。右は項目の exec が 'trigger' のときだけ。
-        下の階層の 1 (戻る) と 8 (次へ) は、左ではトリガー待ち。"""
+        下の階層の 1 (戻る) と REST も、左ではトリガー待ち。"""
         ps = (self.panels or {}).get(side)
         if ps is None or ps.selected is None:
             return False
-        if side == 'left_game' and len(ps.stack) > 1 and ps.selected in (PANEL_BACK_SLOT, PANEL_NEXT_SLOT):
-            return True
-        row = ps.table().get(ps.selected)
-        if row is None:
+        kind = ps.slot_kind(ps.selected)
+        if kind in ('error_none', 'none'):
             return False
+        if side == 'left_game':
+            return True                      # 左 GAME パネルは、戻る・REST・フォルダも全部トリガー
+        row = ps.table().get(ps.selected) or {}
         if side == 'left_game':
             return True
         return row.get('exec', 'tilt') == 'trigger'
+
+    def _a_blocked(self, name, value):
+        """(0.1.35) A ボタンを封じるか。そのパネルの側 (right.a = 右パネル、left.a = 左パネル) で、
+        "block_a": true の項目を選んでいる間に押した A は、ゲームへ出さない。押したときに封じた A は、離すときも出さない。"""
+        if not hasattr(self, '_a_held_blocked'):
+            self._a_held_blocked = set()
+        if not value:
+            if name in self._a_held_blocked:
+                self._a_held_blocked.discard(name)
+                return True
+            return False
+        ps = (self.panels or {}).get('right_game' if name == 'right.a' else 'left_game')
+        row = ps.table().get(ps.selected) if (ps is not None and ps.selected is not None) else None
+        if row is not None and row.get('block_a') is True:
+            self._a_held_blocked.add(name)
+            print("[Panel] {}: A を封じました ({} を選んでいる間)".format(name, row.get('label', ps.selected)))
+            return True
+        return False
 
     def _half_assigned(self, n_half):
         """(0.1.33) 半押しに割り当てがあるか (トリガーのロック用)。panel_execute だけの割り当ては、そのパネルで
@@ -6259,8 +6309,8 @@ class InputLayer(object):
             print("[Panel] {}: {} でフォルダ '{}' に入る".format(side, slot, what))
         elif kind == 'back':
             print("[Panel] {}: 戻る (今 '{}')".format(side, ps.stack[-1]))
-        elif kind == 'next':
-            print("[Panel] {}: 次へ (まだ作っていません)".format(side))
+        elif kind == 'rest':
+            print("[Panel] {}: REST (何もしない)".format(side))
         else:
             print("[Panel] {}: 何もしない (選び {})".format(side, slot or '-'))
 
@@ -6299,6 +6349,8 @@ class InputLayer(object):
             return
         self.values[name] = value
         self.n_events += 1
+        if name in ('left.a', 'right.a') and self._a_blocked(name, value):
+            return                           # 0.1.35: パネルの項目の block_a
         if self.trigger_test and (name.endswith('.trigger_half') or name.endswith('.trigger_full')):
             print("[TRG] {} {}".format(name, '成り立った' if value else '外れた'))
         for cmd, args in self._bind.get(name, ()):
