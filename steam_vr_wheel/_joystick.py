@@ -238,7 +238,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.40'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.41'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -6006,7 +6006,9 @@ def build_panel_states(profile):
 
 PANEL_STICK_DEADZONE = 0.60  # [CONFIG] (0.1.30) 倒した量 (0〜1) がこれ以上になったら選ぶ (それ未満では選びを変えない。選んだ項目は残る)
 PANEL_STICK_RELEASE = 0.45   # [CONFIG] (0.1.35) 一度倒したあと、これ未満に戻るまでは倒したままとみなす (01 の Q19、VirtualDPad と同じ)
-PANEL_PRESS_SEC = 0.10       # [CONFIG] (0.1.34) パネルの項目でボタンを出すとき、押している時間 [秒]
+PANEL_PRESS_SEC = 0.10       # [CONFIG] (0.1.34) パネルの項目でボタンを出すとき、押している時間 [秒] (0.1.41: 押しっぱなしのときは、これが最短の時間)
+PANEL_ITEM_HOLD = True       # [CONFIG] (0.1.41) True = 実行した操作 (トリガーの半押し / スティックを倒したまま) を続けている間、項目のボタンを押したままにする。
+                             #   False = 0.1.40 まで (PANEL_PRESS_SEC だけ押して離す)。項目ごとに "hold": true / false でも決められる
 PANEL_ITEM_COMMANDS = ('vjoy_button',)   # (0.1.34) パネルの項目に書ける命令 (項目の中身は作りながら増やす)
 
 
@@ -6304,6 +6306,7 @@ class InputLayer(object):
                 print("[Panel] {}: 選ぶ {}".format(side, slot))
             if side == 'right_game' and not self._panel_waits_trigger(side):
                 self._panel_run(side, 'tilt')
+        self._panel_release_due()                    # 0.1.41: 中央に戻したフレームで、押しっぱなしの項目を離す
 
     def _panel_waits_trigger(self, side):
         """(0.1.33) そのパネルで今、トリガーで実行する項目を選んでいるか。
@@ -6348,8 +6351,10 @@ class InputLayer(object):
                 return True
         return False
 
-    def _panel_item_press(self, side, slot, row):
+    def _panel_item_press(self, side, slot, row, how='trigger'):
         """(0.1.34) 項目の 'command' と 'args' (割り当てと同じ書き方) を呼ぶ。押して、PANEL_PRESS_SEC 後に離す。
+        (0.1.41) 押しっぱなし (PANEL_ITEM_HOLD か項目の "hold") なら、実行した操作が続いている間は離さない:
+          how 'trigger' = そのパネルのトリガーの半押しを離すまで / 'tilt' = スティックを中央に戻すか、別の項目に移るまで。
         命令が無い項目は行に出すだけ。書ける命令は PANEL_ITEM_COMMANDS だけ。"""
         cmd = row.get('command')
         if cmd is None:
@@ -6370,7 +6375,18 @@ class InputLayer(object):
             except Exception as e:
                 print("[Panel] Warning: {} の {} を実行できません: {}".format(side, slot, e))
                 continue
-            self._panel_releases.append((time.time() + PANEL_PRESS_SEC, cmd, name, a))
+            hold = (how, side, slot) if bool(row.get('hold', PANEL_ITEM_HOLD)) else None   # 0.1.41
+            self._panel_releases.append((time.time() + PANEL_PRESS_SEC, cmd, name, a, hold))
+
+    def _panel_still_held(self, hold):
+        """(0.1.41) 押しっぱなしの項目で、実行した操作がまだ続いているか。"""
+        if hold is None:
+            return False
+        how, side, slot = hold
+        if how == 'trigger':
+            return bool(getattr(self, '_panel_trigger_on', {}).get(side))
+        ps = (self.panels or {}).get(side)
+        return bool(getattr(self, '_panel_stick_out', {}).get(side)) and ps is not None and ps.selected == slot
 
     def _panel_release_due(self):
         """(0.1.34) 押す時間が過ぎた項目のボタンを離す (毎フレーム、update_panel_selection から)。"""
@@ -6379,9 +6395,9 @@ class InputLayer(object):
             return
         now = time.time()
         keep = []
-        for due, cmd, name, args in rel:
-            if now < due:
-                keep.append((due, cmd, name, args))
+        for due, cmd, name, args, hold in rel:
+            if now < due or self._panel_still_held(hold):
+                keep.append((due, cmd, name, args, hold))
                 continue
             try:
                 getattr(self, '_cmd_' + cmd)(name, False, args)
@@ -6397,7 +6413,7 @@ class InputLayer(object):
         kind, what = ps.execute()
         if kind == 'item':
             print("[Panel] {}: 実行 {} {} ({})".format(side, slot, what.get('label', what), how))
-            self._panel_item_press(side, slot, what)
+            self._panel_item_press(side, slot, what, how)
         elif kind == 'enter':
             print("[Panel] {}: {} でフォルダ '{}' に入る".format(side, slot, what))
         elif kind == 'back':
@@ -6461,9 +6477,12 @@ class InputLayer(object):
         """(0.1.33) 命令 'panel_execute': 入力が成り立ったとき、args['panel'] のパネルで選んでいる項目を実行する。
         トリガー待ちの項目 (左は全部、右は exec が 'trigger') だけ。それ以外を選んでいるときは何もしない
         (そのときはロックの決まりで、この入力は割り当てが無いとみなされ、引き切りの割り当てが出る)。"""
+        side = args.get('panel', 'left_game')
+        if not hasattr(self, '_panel_trigger_on'):
+            self._panel_trigger_on = {}
+        self._panel_trigger_on[side] = bool(value)       # 0.1.41: 押しっぱなしの項目は、これが False になるまで離さない
         if not value:
             return
-        side = args.get('panel', 'left_game')
         if side not in (self.panels or {}):
             print("[Panel] {} がプロファイルに無いので実行できません ({})".format(side, name))
             return
@@ -6542,8 +6561,8 @@ PANEL_COLOR = HUD_COLOR_GREEN              # [CONFIG] (0.1.36) 線と文字の�
 PANEL_COLOR_DIM = (130, 255, 180, 110)     # [CONFIG] (0.1.36) NONE / REST の文字の色
 PANEL_COLOR_ERROR = (255, 0, 255, 255)     # [CONFIG] (0.1.36) エラーの NONE (書いていない番号) の色 (赤紫、Q29-1)
 PANEL_COLOR_SELECT = (130, 255, 180, 70)   # [CONFIG] (0.1.36) 選んでいる扇形の塗り
-POV_MODE_NEEDS_EXTRA_TOUCH = True          # [CONFIG] (0.1.40) 十字キーモードに入るのは「左スティックのタッチ + POV_MODE_EXTRA_TOUCH_IDS のタッチ」のときだけ。False = 0.1.39 までと同じ (スティックのタッチかアプリメニューだけで入る)
-POV_MODE_EXTRA_TOUCH_IDS = [7]             # [CONFIG] (0.1.40) 一緒に触れているボタンの番号 (openvr の EVRButtonId)。7 = k_EButton_A = Oculus Touch の左 X ボタン
+POV_MODE_NEEDS_EXTRA_TOUCH = True          # [CONFIG] (0.1.40) 十字キーモードに入るのは「左スティックのタッチ + POV_MODE_EXTRA_TOUCH_IDS (Y) のタッチ」のときだけ。False = 0.1.39 までと同じ (スティックのタッチかアプリメニューだけで入る)
+POV_MODE_EXTRA_TOUCH_IDS = [1]             # [CONFIG] (0.1.40) 一緒に触れているボタンの番号 (openvr の EVRButtonId)。0.1.41: 1 = k_EButton_ApplicationMenu = 左 Y ボタン (実機で確かめた。7 = X)
 PANEL_HIDE_RIGHT_IN_POV = False            # [CONFIG] (0.1.36) 十字キーモードの間、右パネルを隠す (0.1.40: 既定は隠さない。にいちごさんの決定)
 
 
@@ -6978,7 +6997,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
 
     def _update_pad_and_pov(self, left_ctr, right_ctr):
         if POV_MODE_NEEDS_EXTRA_TOUCH:
-            # (0.1.40) 左スティックのタッチ + X ボタンのタッチ の両方で十字キーモード (スティックのタッチだけでは入らない)
+            # (0.1.40) 左スティックのタッチ + Y ボタンのタッチ の両方で十字キーモード (スティックのタッチだけでは入らない)
             stick_touch = self.left_touchpad_touched or any(self._is_left_touched(i) for i in self.pov_touch_ids)
             extra_touch = any(self._is_left_touched(i) for i in POV_MODE_EXTRA_TOUCH_IDS)
             povtouchfind = bool(stick_touch and extra_touch)
