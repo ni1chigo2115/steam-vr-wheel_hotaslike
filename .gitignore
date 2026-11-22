@@ -6,3 +6,4 @@ build
 dist
 .idea/
 *.idea/
+steam_vr_wheel/media/vc_log.txt

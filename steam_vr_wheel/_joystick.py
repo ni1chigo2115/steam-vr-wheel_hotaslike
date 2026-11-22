@@ -135,6 +135,18 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     二段では、引き切りたいときに半押しが先に一瞬出るのを避けるため、半押しは TRIGGER_HALF_DELAY_SEC (0.15 秒) 半押しの区間に
     とどまってから出す。その前に引き切りの区間に入ったら、その引きでは半押しを出さない。待ちの間に戻したら、半押しを短く
     (TRIGGER_TAP_HOLD_SEC) 出す (軽く叩いたときも半押しとして効くように)。同梱に profiles/test_switch.json を足した。
+  (0.1.29〜0.1.41 のパネルの変更は、PanelState・InputLayer のパネルの命令・PanelOverlay の節の説明に書いてある)
+  0.1.42: ブレーキとクルーズとスロットル B モード (DriveAssist。決まりはその節の説明)。パネルの項目の命令に 'brake' と 'cruise' を足した。
+    ブレーキ: BRAKE の項目 ("command": "brake") を選んでいる間だけ、そのパネルの側のトリガーのアナログ値がブレーキになる。
+    方式 'brake.method' = 'pseudo' (スロットルの出力から引く。0 未満にしない) / 'axis' (軸に出す) / 'button' (ボタン)。
+    クルーズ: CRUISE の項目 ("command": "cruise") は選んだだけでは何もせず、トリガーのダブルクリックで入る / 切る。
+    その項目へスティックを 2 回倒すと、標準 (入ったときの値を保つ) とセンター (50%、HUD は CRUISE C) を切り替える。
+    スロットル B モード ('throttle.mode' = 'B'): アクセルを SL0、ブレーキを SL1 に出す (ゲームパッド向け)。
+    HUD: Bマークの段を MNVR と BRAKE の 2 つの部品にした (どちらも黄色 HUD_BMARK_COLOR、別々に出る)。
+    MNVR はパネルの項目に "hud": "mnvr" と書いたボタンを押している間だけ出る (左パネルが無いプロファイルでは 0.1.41 までと同じく左のアプリメニュー)。
+    通知の段の部品に 'on' (その信号の間だけ見せる。場所は空けておく) を足した。
+    パネルの実行のログに、vJoy へ何を出すか (ボタン何番を押す / 離す、出さない) を書くようにした。
+    PC の画面の窓 VC コンソール (vc_gui.py) を足した。VC_GUI_AUTOSTART で起動時に別のプロセスとして開く。ログは VC_LOG_FILE に書く。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -183,7 +195,7 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
 ■ HUD の信号 (通知の段の 'on' や 'color_rules' に書く名前)
     'vbtn:番号'  vJoy に出したボタン (Joystick が device.set_button を見張って自動で集める)
     'sig:always' 'sig:font_test' 'sig:cruise' 'sig:left_app_menu' 'sig:pov_mode' 'sig:cece27'
-    'sig:throttle_over_limit' 'sig:stick_grab' 'sig:throttle_grab'
+    'sig:throttle_over_limit' 'sig:stick_grab' 'sig:throttle_grab' 'sig:mnvr' 'sig:brake' (0.1.42)
   新しい信号は Joystick.update() の self.hud.update_hud_state(signals={...}) に足す。
   通知の段は「段を作る関数」(hud_row_bmark / hud_row_cruise / hud_rows_font_test) で作り、HUD_NOTICE_ROWS の順に並ぶ。
   毎回変わる文字は部品の 'text_fn' (例 hud_text_cruise_power) が values={...} から作る。'reserve' で幅を固定できる。
@@ -238,7 +250,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.41'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.42'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -396,12 +408,16 @@ HUD_NOTICE_PART_GAP_PX = 14                # [CONFIG] 1つの段の中で、部�
 #       'reserve'    この文字列が入るだけの幅を最初から取っておく (例 '100%')。数字が変わっても幅が増減しない
 #       'align'      'reserve' の幅の中での寄せ方: 'right' (既定) / 'left' / 'center'
 #       'box'        True で部品全体を □ の枠で囲む (SACC の LIMIT のような表示)
+#       'on'         (0.1.42) 信号の名前のリスト。どれかが ON の間だけこの部品を見せる (OFF の間も場所は空けておく。
+#                    薄板は見えている部品の幅だけ)。書かなければいつも見せる。段の 'on' には部品の信号も入れておくこと
 #   ('parts' を書かずに 'image' や 'text' 'box' を段に直接書くと、部品1つの段になる)
 #
 # 信号の名前 ('on' や 'color_rules' に書く):
 #   'sig:always'           いつも ON
 #   'sig:font_test'        HUD_FONT_TEST が True の間 ON (確認用に段を出しておく)
-#   'sig:cruise'           クルーズモード中 (CRUISE_MODE_ENABLED。今は予約)
+#   'sig:cruise'           クルーズ中 (0.1.42 DriveAssist。0.1.41 までは予約)
+#   'sig:mnvr'             (0.1.42) パネルの項目で "hud": "mnvr" のボタンを押している間 (+ HUD_MNVR_HOLD_SEC)
+#   'sig:brake'            (0.1.42) ブレーキが効いている間 (+ HUD_BRAKE_HOLD_SEC)、または "hud": "brake" の項目のボタン
 #   'vbtn:22'              vJoy の仮想ボタン 22 番が押されている (番号は自由。出力した vJoy ボタンを自動で見張る)
 #   'sig:left_app_menu'    左コントローラーのアプリメニュー
 #   'sig:pov_mode'         十字キーモード中
@@ -411,7 +427,7 @@ HUD_NOTICE_PART_GAP_PX = 14                # [CONFIG] 1つの段の中で、部�
 #   'sig:throttle_grab'    左グリップでスロットルをつかんでいる
 #   'sig:trigger_zone'     (0.1.26) どちらかのトリガーが戻り (TRIGGER_RELEASE) より引かれている (TRIGGER_HUD)
 # 'text_fn' が受け取る値 (Joystick.update() が毎フレーム渡す):
-#   'throttle' 0.0～1.0 / 'cruise_power' 0.0～1.0 (CRUISE_MODE_Power。None ならスロットルの値) / 'cruise_center' True/False
+#   'throttle' 0.0～1.0 / 'cruise_power' 0.0～1.0 (クルーズで保つ値。クルーズ中でなければスロットルの値) / 'cruise_center' True/False
 
 
 def hud_text_cruise_power(v):
@@ -424,19 +440,39 @@ def hud_text_cruise_power(v):
     return '{}%'.format(int(round(max(0.0, min(1.0, float(p))) * 100)))
 
 
-HUD_BMARK_TEXT = 'MNVR'                     # [CONFIG] (0.1.40) Bマークの段に出す文字 ('MNVR' 'BRAKE' など好きな文字列)。None なら元の絵 (Bmark.png)
+HUD_BMARK_TEXT = 'MNVR'                     # [CONFIG] (0.1.40) 特殊機動の印の文字 ('MNVR' 'SNAP' など好きな文字列)。None なら元の絵 (Bmark.png) の段 (BRAKE は出ない)
 HUD_BMARK_BOX = True                       # [CONFIG] (0.1.40) 文字を枠で囲む (CRUISE と同じ枠)
+HUD_BRAKE_TEXT = 'BRAKE'                   # [CONFIG] (0.1.42) ブレーキの印の文字。None = ブレーキの印を出さない
+HUD_BMARK_COLOR = HUD_COLOR_YELLOW         # [CONFIG] (0.1.42) MNVR と BRAKE の文字と枠の色 (SACC と同じ黄色。0.1.41 までは緑だった)
+HUD_BMARK_ORDER = ['mnvr', 'brake']        # [CONFIG] (0.1.42) 段の中の並び (左から)。'mnvr' / 'brake'
+HUD_MNVR_HOLD_SEC = 1.5                    # [CONFIG] (0.1.42) MNVR の印を、ボタンを離してから残す秒数 (0.1.41 までの Bマークと同じ)
+HUD_BRAKE_HOLD_SEC = 0.3                   # [CONFIG] (0.1.42) BRAKE の印を、ブレーキが 0 に戻ってから残す秒数
+HUD_BMARK_APP_MENU_FALLBACK = True         # [CONFIG] (0.1.42) 左パネルが無いプロファイルでは、0.1.41 までと同じく左のアプリメニュー (Y) を押すと MNVR を出す
 
 
 def hud_row_bmark():
-    """1段目: Bマーク (左コントローラーのアプリメニュー。離してから 1.5 秒残す)。
-    (0.1.40) HUD_BMARK_TEXT に文字があれば、絵の代わりにその文字を出す (フォントに無い字は出ない。Hornet は英大文字と数字が安全)。"""
-    row = {'id': 'B', 'on': ['sig:left_app_menu'], 'hold_sec': 1.5,
+    """1段目: 特殊機動 (MNVR) とブレーキ (BRAKE) の印 (01 の 3.7: 別々にオンオフ、パネルから操作したときだけ出す)。
+    (0.1.40) HUD_BMARK_TEXT に文字があれば、絵の代わりにその文字を出す (フォントに無い字は出ない。Hornet は英大文字と数字が安全)。
+    (0.1.42) MNVR と BRAKE を 1 つの段の 2 つの部品にした。部品の 'on' で別々に出る (出ていない方の場所は空けておく)。
+      'sig:mnvr'  パネルの項目で "hud": "mnvr" と書いた項目のボタンを押している間。左パネルが無いプロファイルでは
+                  左のアプリメニュー (HUD_BMARK_APP_MENU_FALLBACK)。
+      'sig:brake' ブレーキ (DriveAssist) が効いている間、または "hud": "brake" と書いた項目のボタンを押している間。
+    消えるまでの残り時間 (HUD_MNVR_HOLD_SEC / HUD_BRAKE_HOLD_SEC) は Joystick.update() が信号に入れる (部品ごとに違うので、段の 'hold_sec' は 0)。
+    HUD_BMARK_TEXT = None なら 0.1.39 までの絵 (Bmark.png) を 'sig:mnvr' の間だけ出す。"""
+    row = {'id': 'B', 'on': ['sig:mnvr', 'sig:brake'], 'color': HUD_BMARK_COLOR,
            'space_after_px': HUD_NOTICE_ROW_HEIGHT_PX}      # SACC の BRAKE のように、下の段との間を1段分あける
-    if HUD_BMARK_TEXT:
-        row['parts'] = [{'text': str(HUD_BMARK_TEXT), 'box': bool(HUD_BMARK_BOX)}]
-    else:
+    if not HUD_BMARK_TEXT:
+        row['on'] = ['sig:mnvr']
         row['image'] = 'Bmark.png'
+        return row
+    words = {'mnvr': HUD_BMARK_TEXT, 'brake': HUD_BRAKE_TEXT}
+    parts = []
+    for key in HUD_BMARK_ORDER:
+        if words.get(key):
+            parts.append({'text': str(words[key]), 'box': bool(HUD_BMARK_BOX), 'on': ['sig:' + key]})
+    if not parts:
+        parts = [{'text': str(HUD_BMARK_TEXT), 'box': bool(HUD_BMARK_BOX), 'on': ['sig:mnvr']}]
+    row['parts'] = parts
     return row
 
 
@@ -795,8 +831,8 @@ THROTTLE_ACCEL_THRESHOLD = 0.018       # [CONFIG] 100%へ突破するのに必�
 
 # 【将来の作業用準備】クルーズモード (指定スロットルに固定し、前後させても戻すモード)
 # オンの間はリミッターが干渉しない。
-CRUISE_MODE_ENABLED = False            # [CONFIG]
-CRUISE_MODE_Power = None               # [CONFIG] クルーズモードで固定する throttle 出力値 (未使用・予約)
+CRUISE_MODE_ENABLED = True             # [CONFIG] (0.1.42) クルーズを使う (False = パネルの CRUISE の項目を実行しても入らない)。0.1.41 までは予約 (False)
+CRUISE_MODE_Power = None               # [CONFIG] (0.1.42) クルーズで保つスロットルの値 0〜1 を固定する。None = 入ったときのスロットルの値 (センターなら 0.5)
 # ※ スロットルの値に関わらず 50% のクルーズにする「センタークルーズ」のフラグは、仮想ボタンで代用できるかもしれない
 
 
@@ -1236,6 +1272,113 @@ def hud_log(*args):
 hud_log_install()
 
 
+# --- (0.1.42) ログのファイルと VC コンソール --------------------------------------------------------------
+# コンソールに出た行を 1 行ずつ VC_LOG_FILE にも書く。PC の画面の窓 VC コンソール (vc_gui.py、別のプロセス) がこれを読んで出す。
+# 起動のたびに空から書き、VC_LOG_FILE_MAX_BYTES を超えたら空にし直す。書けなくなったら黙って止める (操作には影響させない)。
+VC_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'media', 'vc_log.txt')   # [CONFIG] (0.1.42) ログを書くファイル。None = 書かない
+VC_LOG_FILE_MAX_BYTES = 8 * 1024 * 1024    # [CONFIG] (0.1.42) この大きさを超えたら空にし直す [バイト]
+VC_GUI_AUTOSTART = True                    # [CONFIG] (0.1.42) Joystick を作るときに VC コンソール (vc_gui.py) を別のプロセスで開く。
+                                           #   False = 開かない (手で開くときは steam_vr_wheel の 1 つ上のフォルダで python -m steam_vr_wheel.vc_gui)
+
+
+class _VcLogFile(object):
+    """(0.1.42) VC_LOG_FILE に、出来上がった行だけを書く (読む側が途中の行を見ないように)。stdout と stderr で共有する。"""
+
+    def __init__(self, path):
+        self._lock = threading.Lock()
+        self._path = path
+        self._f = None
+        self._bytes = 0
+        try:
+            self._f = open(path, 'w', encoding='utf-8', newline='\n')
+        except Exception:
+            self._f = None
+
+    def write_line(self, line):
+        if self._f is None:
+            return
+        try:
+            with self._lock:
+                data = line + '\n'
+                self._bytes += len(data.encode('utf-8', 'replace'))
+                if self._bytes > VC_LOG_FILE_MAX_BYTES:
+                    self._f.seek(0)
+                    self._f.truncate()
+                    self._bytes = len(data.encode('utf-8', 'replace'))
+                self._f.write(data)
+                self._f.flush()
+        except Exception:
+            self._f = None
+
+
+class _VcLogTee(object):
+    """(0.1.42) sys.stdout / sys.stderr の外側に付ける。元の出力に書き、1 行できるたびに _VcLogFile に渡す。"""
+
+    def __init__(self, stream, logfile):
+        self._stream = stream
+        self._file = logfile
+        self._buf = ''
+        self._buf_lock = threading.Lock()
+
+    def write(self, s):
+        r = self._stream.write(s) if self._stream is not None else None
+        try:
+            with self._buf_lock:
+                self._buf += s
+                lines = self._buf.split('\n')
+                self._buf = lines.pop()
+            for line in lines:
+                self._file.write_line(line.split('\r')[-1])
+        except Exception:
+            pass
+        return r if r is not None else len(s)
+
+    def flush(self):
+        if self._stream is not None:
+            self._stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def vc_log_install():
+    """(0.1.42) ログのファイルを付ける。何度呼んでも 1 回だけ。"""
+    import sys
+    if not VC_LOG_FILE or isinstance(sys.stdout, _VcLogTee):
+        return
+    logfile = _VcLogFile(VC_LOG_FILE)
+    sys.stdout = _VcLogTee(sys.stdout, logfile)
+    sys.stderr = _VcLogTee(sys.stderr, logfile)
+
+
+vc_log_install()
+
+
+def vc_gui_start():
+    """(0.1.42) VC コンソール (vc_gui.py) を別のプロセスで開く。窓は 1 つだけ (vc_gui 側が 2 つ目を閉じる)。
+    pythonw.exe があればそれで開く (黒いコンソールの窓を増やさない)。失敗したら 1 行出して続ける。"""
+    import sys
+    import subprocess
+    pkg = os.path.dirname(os.path.abspath(__file__))
+    if not os.path.exists(os.path.join(pkg, 'vc_gui.py')):
+        print("[GUI] vc_gui.py が無いので VC コンソールは開きません")
+        return None
+    exe = sys.executable or 'python'
+    w = os.path.join(os.path.dirname(exe), 'pythonw.exe')
+    if os.name == 'nt' and os.path.exists(w):
+        exe = w
+    cmd = [exe, '-m', 'steam_vr_wheel.vc_gui']
+    if VC_LOG_FILE:
+        cmd += ['--log', VC_LOG_FILE]
+    try:
+        proc = subprocess.Popen(cmd, cwd=os.path.dirname(pkg))
+        print("[GUI] VC コンソールを開きました (VC_GUI_AUTOSTART。閉じても操作には影響しません)")
+        return proc
+    except Exception as e:
+        print("[GUI] Warning: VC コンソールを開けません: {}".format(e))
+        return None
+
+
 # ==============================================================================
 # HUD 1枚板方式 ― 構成
 #   HudAssets       素材(画像・フォント)の読込
@@ -1462,6 +1605,7 @@ def _hud_split_frame(frame):
 
 
 _HUD_PART_KEYS = ('image', 'text', 'text_fn', 'reserve', 'align', 'box', 'font', 'size', 'btn_scale', 'recolor')
+HUD_PART_HIDDEN = '\x00hidden'             # (0.1.42) hud_row_texts の印: この部品は今は見せない (場所だけ空ける)
 
 
 def hud_normalize_notice_rows(rows):
@@ -1489,19 +1633,26 @@ def hud_normalize_notice_rows(rows):
             pt.setdefault('align', 'right')
             if not pt.get('image') and not pt.get('text_fn') and not pt.get('text'):
                 pt['text'] = '[{}]'.format(row['id'])
+            pt['on'] = list(pt['on'] or []) if pt.get('on') is not None else None     # 0.1.42: 部品ごとの 'on'
         row['parts'] = parts
         # 色が見た目に効くのは「文字」か「recolor する画像」だけ
         row['uses_color'] = any((not pt.get('image')) or pt['recolor'] for pt in parts)
+        # (0.1.42) 部品ごとの 'on' があるか (あれば、信号で部品の見せ方が変わる)
+        row['part_on'] = any(pt['on'] is not None for pt in parts)
         # 毎回文字を作る部品があるか (あれば、その文字が変わったときだけ描き直す)
-        row['dynamic'] = any(callable(pt.get('text_fn')) for pt in parts)
+        row['dynamic'] = any(callable(pt.get('text_fn')) for pt in parts) or row['part_on']
         out.append(row)
     return out
 
 
-def hud_row_texts(row, values):
-    """'text_fn' を持つ部品の文字を作る (その他の部品は None)。関数が失敗したら '?'。"""
+def hud_row_texts(row, values, sig=None):
+    """'text_fn' を持つ部品の文字を作る (その他の部品は None)。関数が失敗したら '?'。
+    (0.1.42) 部品の 'on' の信号がどれも OFF なら HUD_PART_HIDDEN (sig = {信号: bool}。None なら全部 OFF)。"""
     texts = []
     for pt in row['parts']:
+        if pt.get('on') is not None and not any((sig or {}).get(n) for n in pt['on']):
+            texts.append(HUD_PART_HIDDEN)
+            continue
         fn = pt.get('text_fn')
         if callable(fn):
             try:
@@ -1601,7 +1752,14 @@ class HudAssets(object):
         return img
 
     def _part_art(self, row, i, pt, c, height, mult, text):
-        """段の中の部品1つ (にじみ前)。"""
+        """段の中の部品1つ (にじみ前)。(0.1.42) text が HUD_PART_HIDDEN なら、見せるときと同じ大きさの透明な絵 (場所だけ空ける)。"""
+        if text == HUD_PART_HIDDEN:
+            shown = self._part_art_shown(row, i, pt, c, height, mult, None)
+            return Image.new('RGBA', shown.size, (0, 0, 0, 0))
+        return self._part_art_shown(row, i, pt, c, height, mult, text)
+
+    def _part_art_shown(self, row, i, pt, c, height, mult, text):
+        """段の中の部品1つを見せるときの絵 (にじみ前)。"""
         if pt.get('image'):
             raw = self.raw_image(pt['image'])
             if raw is not None:
@@ -4522,10 +4680,18 @@ class HudPlateOverlay(object):
         geo = self.layout.row_geo[index]
         art = self.assets.row_art(row, color, self.layout.mult.get('notice', 1.0), texts)
         img = Image.new('RGBA', geo.size, (0, 0, 0, 0))
+        ax = (geo.size[0] - art.width) // 2
         if geo.margin > 0:
-            img.alpha_composite(Image.new('RGBA', geo.size, self.layout.panel_rgba))
+            bb = art.getchannel('A').getbbox() if row.get('part_on') else None
+            if bb is not None:
+                # 0.1.42: 部品ごとの 'on' がある段は、見えている部品の幅だけ薄板を敷く (空けてある場所は暗くしない)
+                x0 = max(0, ax + bb[0] - geo.margin)
+                x1 = min(geo.size[0], ax + bb[2] + geo.margin)
+                img.alpha_composite(Image.new('RGBA', (max(1, x1 - x0), geo.size[1]), self.layout.panel_rgba), dest=(x0, 0))
+            else:
+                img.alpha_composite(Image.new('RGBA', geo.size, self.layout.panel_rgba))
         # 段の大きさはレイアウト時 (確保した幅) に決めてある。絵はその真ん中に置く
-        _hud_blit_ko(img, art, ((geo.size[0] - art.width) // 2, (geo.size[1] - art.height) // 2))
+        _hud_blit_ko(img, art, (ax, (geo.size[1] - art.height) // 2))
         if len(self._row_img) > 256:
             self._row_img.clear()
         self._row_img[key] = img
@@ -4945,7 +5111,7 @@ class HudPlateOverlay(object):
                 sig['vbtn:{}'.format(n)] = bool(s)
         self.board.set_signals(sig)
         # 段ごとに (出ているか, 色, 'text_fn' の文字)
-        board_key = tuple((vis, col, hud_row_texts(self.rows[i], self._values) if (vis and self.rows[i]['dynamic']) else None)
+        board_key = tuple((vis, col, hud_row_texts(self.rows[i], self._values, sig) if (vis and self.rows[i]['dynamic']) else None)
                           for i, (vis, col) in enumerate(self.board.update(now)))
 
         if self.debug and now - self._last_debug_time >= 1.0:
@@ -5353,6 +5519,7 @@ class Throttle():
         self._last_delta = 0.0
         self.enable_limiter = enable_limiter  # スロットル専用リミッターを有効にするか
         self._limiter_bypassed = False        # リミッター超過後、緑に戻るまで自由操作にするフラグ
+        self.cruise_active = False            # (0.1.42) クルーズ中か (Joystick が毎フレーム入れる)。クルーズ中はリミッターを止める
 
     @property
     def x(self):
@@ -5387,7 +5554,7 @@ class Throttle():
                 # 【アクセラレータ・リミッターシステム】 (スロットル専用)
                 # ==============================================================
                 target_limit = self.size * THROTTLE_ACCEL_LIMIT_RATIO
-                if self.enable_limiter and THROTTLE_ACCELERATOR_LIMITTER and not CRUISE_MODE_ENABLED:
+                if self.enable_limiter and THROTTLE_ACCELERATOR_LIMITTER and not self.cruise_active:   # 0.1.42: 予約の CRUISE_MODE_ENABLED から
                     # スロットルが再び制限値以下（緑の領域）に戻ったらバイパスを解除
                     if self.throttle_z <= target_limit:
                         self._limiter_bypassed = False
@@ -6009,7 +6176,8 @@ PANEL_STICK_RELEASE = 0.45   # [CONFIG] (0.1.35) 一度倒したあと、これ�
 PANEL_PRESS_SEC = 0.10       # [CONFIG] (0.1.34) パネルの項目でボタンを出すとき、押している時間 [秒] (0.1.41: 押しっぱなしのときは、これが最短の時間)
 PANEL_ITEM_HOLD = True       # [CONFIG] (0.1.41) True = 実行した操作 (トリガーの半押し / スティックを倒したまま) を続けている間、項目のボタンを押したままにする。
                              #   False = 0.1.40 まで (PANEL_PRESS_SEC だけ押して離す)。項目ごとに "hold": true / false でも決められる
-PANEL_ITEM_COMMANDS = ('vjoy_button',)   # (0.1.34) パネルの項目に書ける命令 (項目の中身は作りながら増やす)
+PANEL_ITEM_COMMANDS = ('vjoy_button', 'brake', 'cruise')   # (0.1.34) パネルの項目に書ける命令 (0.1.42: 'brake' と 'cruise' は DriveAssist)
+PANEL_ITEM_HUD_MARKS = ('mnvr', 'brake')  # (0.1.42) 項目の "hud" に書ける印 (そのボタンを押している間 'sig:<印>' が入る)
 
 
 def panel_slot_from_stick(x, y, n, deadzone=None):
@@ -6167,6 +6335,7 @@ class InputLayer(object):
         self.profile_name = profile['name'] if profile else '(コードの既定)'
         self.profile_path = profile['path'] if profile else None
         settings = (profile or {}).get('settings') or {}
+        self.settings = dict(settings)                              # 0.1.42: DriveAssist も読む
         self.thresholds = self._read_thresholds(settings)          # (半押し, 引き切り, 解除)
         self.trigger_button_from = settings.get('input.trigger_button_from', TRIGGER_BUTTON_FROM)
         self.trigger_mode = settings.get('input.trigger_mode', TRIGGER_MODE)                    # 0.1.28
@@ -6298,15 +6467,65 @@ class InputLayer(object):
             if slot is None:
                 self._panel_stick_out[side] = False
                 continue
-            if self._panel_stick_out.get(side) and slot == ps.selected:
+            was_out = self._panel_stick_out.get(side)
+            if was_out and slot == ps.selected:
                 continue
             self._panel_stick_out[side] = True
             if slot != ps.selected:
                 ps.select(slot)
                 print("[Panel] {}: 選ぶ {}".format(side, slot))
+            if not was_out:
+                self._panel_tilted(side, slot)       # 0.1.42: 中央から倒した瞬間 (クルーズの 2 回倒し)
             if side == 'right_game' and not self._panel_waits_trigger(side):
                 self._panel_run(side, 'tilt')
         self._panel_release_due()                    # 0.1.41: 中央に戻したフレームで、押しっぱなしの項目を離す
+
+    def _panel_tilted(self, side, slot):
+        """(0.1.42) スティックを中央から倒した瞬間に呼ぶ。トリガーで実行する CRUISE の項目 ('toggle') へ 2 回倒したら、
+        標準とセンターのクルーズを切り替える (01 の 3.8)。選ぶために倒した 1 回目も数える。"""
+        ps = (self.panels or {}).get(side)
+        row = ps.table().get(slot) if ps is not None else None
+        if not row or row.get('command') != 'cruise' or not self._panel_waits_trigger(side):
+            return
+        if str((row.get('args') or {}).get('action', 'toggle')) != 'toggle':
+            return
+        assist = getattr(self.owner, 'assist', None)
+        if assist is None:
+            return
+        msg = assist.cruise_tilt(time.time(), (side, '/'.join(ps.stack), slot))
+        if msg:
+            print("[Cruise] {} (スティックを 2 回倒した)".format(msg))
+
+    def panel_brake_item(self):
+        """(0.1.42) ブレーキの項目 ("command": "brake") を選んでいるパネルの (側, 項目)。無ければ (None, None)。
+        選んでいる間だけ、DriveAssist がその側のトリガーのアナログ値を読む (生の値を読むのはこの項目だけ、01 の 3.6・3.7)。"""
+        for side in ('left_game', 'right_game'):
+            ps = (self.panels or {}).get(side)
+            if ps is None or ps.selected is None or ps.slot_kind(ps.selected) != 'item':
+                continue
+            row = ps.table().get(ps.selected)
+            if row is not None and row.get('command') == 'brake':
+                return side, row
+        return None, None
+
+    def hud_mark(self, mark, now=None):
+        """(0.1.42) "hud": mark の項目のボタンを押しているか (離してから HUD_MNVR_HOLD_SEC / HUD_BRAKE_HOLD_SEC の間も True)。"""
+        if getattr(self, '_hud_mark_held', {}).get(mark):
+            return True
+        return (time.time() if now is None else now) < getattr(self, '_hud_mark_until', {}).get(mark, 0.0)
+
+    def drop_axis_bindings(self, axes, why):
+        """(0.1.42) 'vjoy_axis' の割り当てのうち、軸 axes ('HID_USAGE_SL0' など) に出すものを外す (同じ軸を 2 つが書くと揺れるため)。"""
+        dropped = []
+        for name in sorted(self._bind.keys()):
+            keep = [(c, a) for c, a in self._bind[name] if not (c == 'vjoy_axis' and a.get('axis') in axes)]
+            if len(keep) != len(self._bind[name]):
+                dropped.append(name)
+                self._bind[name] = keep
+        if dropped:
+            print("[Input] {}: {} の元の割り当てを外しました ({})".format(why, ' / '.join(a.replace('HID_USAGE_', '') for a in axes),
+                                                              ', '.join(dropped)))
+        return dropped
 
     def _panel_waits_trigger(self, side):
         """(0.1.33) そのパネルで今、トリガーで実行する項目を選んでいるか。
@@ -6355,28 +6574,62 @@ class InputLayer(object):
         """(0.1.34) 項目の 'command' と 'args' (割り当てと同じ書き方) を呼ぶ。押して、PANEL_PRESS_SEC 後に離す。
         (0.1.41) 押しっぱなし (PANEL_ITEM_HOLD か項目の "hold") なら、実行した操作が続いている間は離さない:
           how 'trigger' = そのパネルのトリガーの半押しを離すまで / 'tilt' = スティックを中央に戻すか、別の項目に移るまで。
-        命令が無い項目は行に出すだけ。書ける命令は PANEL_ITEM_COMMANDS だけ。"""
+        命令が無い項目は行に出すだけ。書ける命令は PANEL_ITEM_COMMANDS だけ。
+        (0.1.42) 'brake' と 'cruise' は DriveAssist へ渡す (ボタンは出さない)。"hud": "mnvr" などの項目は、ボタンを押している間
+        HUD の印 ('sig:mnvr') を入れる。返り値 = vJoy へ何を出すかの短い文 (_panel_run が [Panel] の行に足す)。"""
         cmd = row.get('command')
         if cmd is None:
-            return
+            return 'vJoy へは出さない'
         if cmd not in PANEL_ITEM_COMMANDS:
             print("[Panel] Warning: パネルの項目に書ける命令は {} だけです ({} の {}: {!r})".format(
                 ', '.join(PANEL_ITEM_COMMANDS), side, slot, cmd))
-            return
+            return 'vJoy へは出さない (知らない命令)'
         args = dict(row.get('args') or {})
+        assist = getattr(self.owner, 'assist', None)
+        if cmd == 'brake':
+            return assist.brake_text(args, side) if assist is not None else 'vJoy へは出さない (ブレーキの仕組みが無い)'
+        if cmd == 'cruise':
+            action = str(args.get('action', 'toggle'))
+            if action not in CRUISE_ACTIONS:
+                print("[Panel] Warning: クルーズの args の action は {} のどれか ({} の {}: {!r})".format(
+                    ' / '.join(CRUISE_ACTIONS), side, slot, action))
+                return 'vJoy へは出さない (知らない action)'
+            if assist is None:
+                return 'vJoy へは出さない (クルーズの仕組みが無い)'
+            return assist.cruise_command(action, self.owner.throttle_z.x, time.time())
         name = 'panel.{}.{}'.format(side, slot)
         # (0.1.37) "buttons": [a, b] = 同時押し (MNVR がゲームによっては 2 つのボタンの同時押しなので)
         many = [dict(args, button=b) for b in args['buttons']] if isinstance(args.get('buttons'), list) else [args]
         if not hasattr(self, '_panel_releases'):
             self._panel_releases = []
+        if not hasattr(self, '_hud_mark_held'):
+            self._hud_mark_held = {}
+            self._hud_mark_until = {}
+        mark = row.get('hud')
+        if mark is not None and mark not in PANEL_ITEM_HUD_MARKS:
+            print("[Panel] Warning: 項目の hud は {} のどれか ({} の {}: {!r})。印は出しません".format(
+                ' / '.join(PANEL_ITEM_HUD_MARKS), side, slot, mark))
+            mark = None
+        hold_on = bool(row.get('hold', PANEL_ITEM_HOLD))
+        pressed = []
         for a in many:
             try:
                 getattr(self, '_cmd_' + cmd)(name, True, a)
             except Exception as e:
                 print("[Panel] Warning: {} の {} を実行できません: {}".format(side, slot, e))
                 continue
-            hold = (how, side, slot) if bool(row.get('hold', PANEL_ITEM_HOLD)) else None   # 0.1.41
-            self._panel_releases.append((time.time() + PANEL_PRESS_SEC, cmd, name, a, hold))
+            pressed.append(a.get('button'))
+            hold = (how, side, slot) if hold_on else None   # 0.1.41
+            self._panel_releases.append((time.time() + PANEL_PRESS_SEC, cmd, name, a, hold, mark))
+            if mark:
+                self._hud_mark_held.setdefault(mark, set()).add((name, a.get('button')))
+        if not pressed:
+            return 'vJoy へは出せなかった'
+        if hold_on:
+            until = 'トリガーを戻すまで' if how == 'trigger' else 'スティックを戻すまで'
+        else:
+            until = '{:.1f} 秒'.format(PANEL_PRESS_SEC)
+        return 'vJoy ボタン {} を押す ({})'.format(' + '.join(str(b) for b in pressed), until)
 
     def _panel_still_held(self, hold):
         """(0.1.41) 押しっぱなしの項目で、実行した操作がまだ続いているか。"""
@@ -6395,31 +6648,37 @@ class InputLayer(object):
             return
         now = time.time()
         keep = []
-        for due, cmd, name, args, hold in rel:
+        for due, cmd, name, args, hold, mark in rel:
             if now < due or self._panel_still_held(hold):
-                keep.append((due, cmd, name, args, hold))
+                keep.append((due, cmd, name, args, hold, mark))
                 continue
             try:
                 getattr(self, '_cmd_' + cmd)(name, False, args)
+                print("[Panel] {}: vJoy ボタン {} を離す".format(name.replace('panel.', '', 1).replace('.', ' ', 1), args.get('button')))   # 0.1.42
             except Exception as e:
                 print("[Panel] Warning: {} を離せません: {}".format(name, e))
+            if mark:                                                    # 0.1.42: HUD の印は離してから少し残す
+                held = self._hud_mark_held.get(mark, set())
+                held.discard((name, args.get('button')))
+                if not held:
+                    self._hud_mark_until[mark] = now + (HUD_BRAKE_HOLD_SEC if mark == 'brake' else HUD_MNVR_HOLD_SEC)
         self._panel_releases = keep
 
     def _panel_run(self, side, how):
         """(0.1.33) パネルで選んでいる項目を実行して、結果を [Panel] の行に出す。how = 'trigger' / 'tilt'。
-        項目の中身 (ゲームへ何を出すか) はまだ決めていないので、段階 2 では行に出すだけ。"""
+        (0.1.42) 項目の行の後ろに、vJoy へ何を出すか ('→ vJoy ボタン 23 を押す' など) を書く (_panel_item_press の返り値)。"""
         ps = self.panels[side]
         slot = ps.selected
         kind, what = ps.execute()
         if kind == 'item':
-            print("[Panel] {}: 実行 {} {} ({})".format(side, slot, what.get('label', what), how))
-            self._panel_item_press(side, slot, what, how)
+            text = self._panel_item_press(side, slot, what, how)
+            print("[Panel] {}: 実行 {} {} ({}) → {}".format(side, slot, what.get('label', what), how, text))
         elif kind == 'enter':
-            print("[Panel] {}: {} でフォルダ '{}' に入る".format(side, slot, what))
+            print("[Panel] {}: {} でフォルダ '{}' に入る (vJoy へは出さない)".format(side, slot, what))
         elif kind == 'back':
-            print("[Panel] {}: 戻る (今 '{}')".format(side, ps.stack[-1]))
+            print("[Panel] {}: 戻る (今 '{}'。vJoy へは出さない)".format(side, ps.stack[-1]))
         elif kind == 'rest':
-            print("[Panel] {}: REST (何もしない)".format(side))
+            print("[Panel] {}: REST (何もしない。vJoy へは出さない)".format(side))
         else:
             print("[Panel] {}: 何もしない (選び {})".format(side, slot or '-'))
 
@@ -6530,6 +6789,346 @@ class InputLayer(object):
             'あり' if self.trigger_haptic else 'なし'))
         lines.append("[Input] プロファイル: {} / 割り当て {} 行".format(
             self.profile_name, sum(len(v) for v in self._bind.values())))
+        return lines
+
+
+# ==============================================================================
+# ブレーキとクルーズ DriveAssist  (0.1.42)
+# ==============================================================================
+# ■ 決まり (正本は非公開の作業メモの「01 の 3.7 スロットル A/B モード、ブレーキ」と「3.8 クルーズ」。ここはそれをコードにしたもの)
+#   - ブレーキ: パネルの項目 "command": "brake" を選んでいる間だけ、そのパネルの側のトリガーのアナログ値 ('<手>.trigger_value') を読む
+#     (左パネル = 左トリガー)。生の値を読む命令はブレーキの項目にだけあるので、他の項目でトリガーを引いてもブレーキにならない (3.6)。
+#     BRAKE の項目をトリガーで「実行」してもボタンは出さない (項目の実行 = アナログブレーキ、Q26 の R4)。ログに 1 行出すだけ。
+#     計算: トリガーの値 → brake.start〜brake.full を 0〜1 に → brake.curve 乗 → brake.smooth_sec でなめらかに → brake.max 倍。
+#     方式 brake.method (A モード): 'pseudo' = スロットルの出力から引く (0 未満にしない。ゲームにブレーキが無いとき) /
+#       'axis' = brake.axis の軸に出す (その軸の元の割り当ては外す) / 'button' = 量が brake.button_on 以上で brake.button を押す
+#       (離すのはその 8 割未満。ばたつき防止)。B モードでは方式によらず SL1 に出す。
+#   - クルーズ: "command": "cruise"、"args": {"action": ...}
+#       'toggle' (既定) 選んだだけでは何もしない。トリガーのダブルクリック (cruise.double_click_sec 以内に 2 回半押し) で入る / 切る (Q13)。
+#                その項目へスティックを 2 回倒す (cruise.double_tilt_sec 以内) と、標準とセンターを切り替える。選ぶために倒した 1 回目も数える。
+#       'on' / 'off' / 'center'  1 回のトリガーで入る / 切る / 標準とセンターを切り替える (確かめ用。メニューにも使える)。
+#     入ったとき: 標準 = そのときのスロットルの値を保つ / センター = 50% (HUD は CRUISE C)。CRUISE_MODE_Power が数値ならその値。
+#     クルーズの間は、スロットルを動かしてもゲームへの出力はクルーズの値のまま (cruise.exit_on_move が数値なら、つかんだスロットルを
+#     入ったときからそれ以上動かすと切れる)。切ったとき、スロットルはクルーズの値から続く (Joystick がつかみ直しの基準を合わせるので跳ばない)。
+#     クルーズ中はスロットルのリミッターを止める。プロファイルを切り替えるとクルーズは切れる (DriveAssist を作り直す)。
+#   - スロットルの出し方 throttle.mode:
+#       'A' (既定) スロットル = RZ (今まで通り)。
+#       'B' ゲームパッド向け (AC8 の互換モードなど)。throttle.b_center_neutral = true (既定) なら、レバーの 50% より前 = アクセル (SL0)、
+#           後ろ = ブレーキ (SL1)。ブレーキの項目の量と比べて大きい方を SL1 に出す (両方同時に入ることもある。AC8 のハイ G ターン)。
+#           false なら SL0 = レバーの値そのまま、SL1 = ブレーキの項目の量。RZ にも今まで通りスロットルを出す (使わないゲームは割り当てない)。
+#           SL0 / SL1 に出していた元のトリガーの軸の割り当て ('vjoy_axis') は外す (同じ軸を 2 つが書くと揺れるため)。
+#   - 設定はプロファイルの settings (下の DRIVE_ASSIST_SETTINGS の名前) が優先、無ければ [CONFIG]。ブレーキの項目の args に
+#     'brake.' を除いた名前 (例 {"method": "axis", "max": 0.6}) を書くと、その項目だけ変わる。おかしい値は警告して [CONFIG] の値。
+#   - vJoy へは書かない。書くのは Joystick._drive_frame (throttle_outputs() の結果を書く)。HUD の値も Joystick が渡す。
+THROTTLE_MODE = 'A'                        # [CONFIG] (0.1.42) スロットルの出し方 'A' (RZ) / 'B' (アクセル SL0 + ブレーキ SL1)。'throttle.mode' が優先
+THROTTLE_B_CENTER_NEUTRAL = True           # [CONFIG] (0.1.42) B モードで、レバーの真ん中をニュートラルにする (前 = アクセル、後ろ = ブレーキ)。'throttle.b_center_neutral'
+BRAKE_METHOD = 'pseudo'                    # [CONFIG] (0.1.42) ブレーキの方式 'pseudo' / 'axis' / 'button' (A モード)。'brake.method'
+BRAKE_MAX = 1.0                            # [CONFIG] (0.1.42) 効きの最大値 0〜1 (疑似ブレーキならスロットルから引く最大の量)。'brake.max'
+BRAKE_CURVE = 1.0                          # [CONFIG] (0.1.42) 引き具合の曲がり方 (1 = まっすぐ、2 = 引き始めがゆるい、0.5 = 引き始めから強い)。'brake.curve'
+BRAKE_SMOOTH_SEC = 0.08                    # [CONFIG] (0.1.42) トリガーにブレーキが追いつくまでの時間 [秒] (0 = すぐ。大きいほどなめらか)。'brake.smooth_sec'
+BRAKE_START = 0.10                         # [CONFIG] (0.1.42) ブレーキが効き始めるトリガーの値 (TRIGGER_RELEASE と同じにしてある)。'brake.start'
+BRAKE_FULL = 0.95                          # [CONFIG] (0.1.42) ブレーキが最大になるトリガーの値。'brake.full'
+BRAKE_AXIS = 'HID_USAGE_SL1'               # [CONFIG] (0.1.42) 'axis' のときの軸 (BRAKE_AXES のどれか)。'brake.axis'
+BRAKE_BUTTON = 28                          # [CONFIG] (0.1.42) 'button' のときの vJoy ボタン (仮の番号)。'brake.button'
+BRAKE_BUTTON_ON = 0.5                      # [CONFIG] (0.1.42) 'button' のとき、ボタンを押すブレーキの量 (0〜1)。'brake.button_on'
+CRUISE_DOUBLE_CLICK_SEC = 0.40             # [CONFIG] (0.1.42) トリガーの 2 回の半押しの間がこれ以内ならダブルクリック [秒]。'cruise.double_click_sec'
+CRUISE_DOUBLE_TILT_SEC = 0.60              # [CONFIG] (0.1.42) スティックの 2 回の倒しの間がこれ以内なら、標準 / センターを切り替える [秒]。'cruise.double_tilt_sec'
+CRUISE_EXIT_ON_MOVE = None                 # [CONFIG] (0.1.42) None = ダブルクリックだけで切れる。数値 (0〜1) = つかんだスロットルをこれ以上動かしたら切れる。'cruise.exit_on_move'
+THROTTLE_MODES = ('A', 'B')
+BRAKE_METHODS = ('pseudo', 'axis', 'button')
+BRAKE_AXES = ('HID_USAGE_X', 'HID_USAGE_Y', 'HID_USAGE_Z', 'HID_USAGE_RX', 'HID_USAGE_RY', 'HID_USAGE_RZ', 'HID_USAGE_SL0', 'HID_USAGE_SL1')
+CRUISE_ACTIONS = ('toggle', 'on', 'off', 'center')
+DRIVE_ASSIST_SETTINGS = [   # (settings の名前, [CONFIG] の変数名, 種類, 下限, 上限, 選べる値)
+    ('throttle.mode', 'THROTTLE_MODE', 'choice', None, None, THROTTLE_MODES),
+    ('throttle.b_center_neutral', 'THROTTLE_B_CENTER_NEUTRAL', 'bool', None, None, None),
+    ('brake.method', 'BRAKE_METHOD', 'choice', None, None, BRAKE_METHODS),
+    ('brake.max', 'BRAKE_MAX', 'float', 0.0, 1.0, None),
+    ('brake.curve', 'BRAKE_CURVE', 'float', 0.2, 5.0, None),
+    ('brake.smooth_sec', 'BRAKE_SMOOTH_SEC', 'float', 0.0, 1.0, None),
+    ('brake.start', 'BRAKE_START', 'float', 0.0, 0.9, None),
+    ('brake.full', 'BRAKE_FULL', 'float', 0.1, 1.0, None),
+    ('brake.axis', 'BRAKE_AXIS', 'choice', None, None, BRAKE_AXES),
+    ('brake.button', 'BRAKE_BUTTON', 'int', 1, 128, None),
+    ('brake.button_on', 'BRAKE_BUTTON_ON', 'float', 0.0, 1.0, None),
+    ('cruise.double_click_sec', 'CRUISE_DOUBLE_CLICK_SEC', 'float', 0.1, 1.5, None),
+    ('cruise.double_tilt_sec', 'CRUISE_DOUBLE_TILT_SEC', 'float', 0.1, 1.5, None),
+    ('cruise.exit_on_move', 'CRUISE_EXIT_ON_MOVE', 'float_or_none', 0.0, 1.0, None),
+]
+
+
+def _assist_setting(settings, key, default, kind, lo=None, hi=None, choices=None, where='settings'):
+    """(0.1.42) settings[key] を読む。kind = 'float' / 'int' / 'bool' / 'choice' / 'float_or_none'。
+    書いていなければ default。おかしい値なら警告して default。"""
+    if key not in settings:
+        return default
+    v = settings[key]
+    try:
+        if kind == 'bool':
+            if isinstance(v, bool):
+                return v
+            raise ValueError('true か false')
+        if kind == 'choice':
+            if v in choices:
+                return v
+            raise ValueError(' / '.join(str(c) for c in choices) + ' のどれか')
+        if kind == 'float_or_none' and v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError('数で書く')
+        v = int(v) if kind == 'int' else float(v)
+        if (lo is not None and v < lo) or (hi is not None and v > hi):
+            raise ValueError('{} 〜 {}'.format(lo, hi))
+        return v
+    except Exception as e:
+        print("[Assist] Warning: {} の '{}' = {!r} は使えません ({})。{!r} を使います".format(where, key, settings[key], e, default))
+        return default
+
+
+def _axis_short(axis):
+    return str(axis).replace('HID_USAGE_', '')
+
+
+class DriveAssist(object):
+    """(0.1.42) ブレーキとクルーズとスロットルの A / B モード (上の説明)。Joystick が 1 つ持ち、プロファイルを読むたびに作り直す。
+    vJoy には書かない。brake_frame() でブレーキの量を進め、throttle_outputs() が「どの軸に何を出すか」を返す。
+    クルーズを切ったときにスロットルを合わせてほしい値は pop_events() で Joystick が受け取る。"""
+
+    def __init__(self, settings=None):
+        settings = settings or {}
+        self.cfg = {}
+        for key, cname, kind, lo, hi, choices in DRIVE_ASSIST_SETTINGS:
+            self.cfg[key] = _assist_setting(settings, key, globals()[cname], kind, lo, hi, choices)
+        if self.cfg['brake.start'] >= self.cfg['brake.full']:
+            print("[Assist] Warning: brake.start ({}) は brake.full ({}) より小さくしてください。[CONFIG] の値を使います".format(
+                self.cfg['brake.start'], self.cfg['brake.full']))
+            self.cfg['brake.start'], self.cfg['brake.full'] = BRAKE_START, BRAKE_FULL
+        self.brake = 0.0             # なめらかにしたブレーキの量 0〜1 (brake.max を掛ける前)
+        self.brake_out = 0.0         # brake.max を掛けた量 = 出すブレーキ
+        self.brake_peak = 0.0        # 今回の引きでいちばん強かった量 (0 に戻ったときのログ用)
+        self.brake_cfg = self.cfg    # 今のブレーキの設定 (項目の args で上書きしたもの)
+        self._item_cache = {}
+        self._btn = None             # 'button' の方式で押している vJoy ボタン (無ければ None)
+        self._last_t = None
+        self.cruise_on = False
+        self.cruise_center = False
+        self.cruise_value = None     # 標準のクルーズで保つ値 (入ったときのスロットルの値)
+        self._lever_at_on = None     # 入ったときのレバーの値 (cruise.exit_on_move 用)
+        self._last_click = None      # 1 回目の半押しの時刻 (ダブルクリック待ち)
+        self._last_tilt = None       # (時刻, 項目) 1 回目の倒し
+        self._events = []
+
+    # --- 設定 ---
+    def _item_cfg(self, args):
+        """ブレーキの項目の args で上書きした設定。同じ args は使い回す (毎フレーム警告を出さないため)。"""
+        if not args:
+            return self.cfg
+        key = repr(sorted((str(k), repr(v)) for k, v in args.items()))
+        cfg = self._item_cache.get(key)
+        if cfg is None:
+            sub = {}
+            for k, v in args.items():
+                sub['brake.' + str(k)] = v
+            cfg = dict(self.cfg)
+            for k, cname, kind, lo, hi, choices in DRIVE_ASSIST_SETTINGS:
+                if k.startswith('brake.') and k in sub:
+                    cfg[k] = _assist_setting(sub, k, self.cfg[k], kind, lo, hi, choices, where='ブレーキの項目の args')
+            if cfg['brake.start'] >= cfg['brake.full']:
+                cfg['brake.start'], cfg['brake.full'] = self.cfg['brake.start'], self.cfg['brake.full']
+            self._item_cache[key] = cfg
+        return cfg
+
+    def summary(self):
+        c = self.cfg
+        if c['throttle.mode'] == 'B':
+            thr = 'B (アクセル SL0 / ブレーキ SL1{})'.format('、レバーの真ん中がニュートラル' if c['throttle.b_center_neutral'] else '')
+        else:
+            thr = 'A (RZ)'
+        return "[Assist] スロットル {}、ブレーキ {} (最大 {:.0f}%、曲がり {:.1f}、なめらか {:.2f} 秒、{:.2f}〜{:.2f})、クルーズ {} (ダブルクリック {:.2f} 秒)".format(
+            thr, self._method_text(c), c['brake.max'] * 100, c['brake.curve'], c['brake.smooth_sec'], c['brake.start'], c['brake.full'],
+            '使う' if CRUISE_MODE_ENABLED else '使わない', c['cruise.double_click_sec'])
+
+    def _method_text(self, cfg):
+        if self.cfg['throttle.mode'] == 'B':
+            return 'SL1'
+        m = cfg['brake.method']
+        if m == 'pseudo':
+            return '疑似 (RZ から引く)'
+        if m == 'axis':
+            return '軸 {}'.format(_axis_short(cfg['brake.axis']))
+        return 'ボタン {} ({:.0f}% 以上)'.format(cfg['brake.button'], cfg['brake.button_on'] * 100)
+
+    def throttle_axes_text(self):
+        return 'SL0 / SL1' if self.cfg['throttle.mode'] == 'B' else 'RZ'
+
+    def brake_text(self, args, side):
+        """BRAKE の項目を実行したときの [Panel] の行の後ろの文。"""
+        cfg = self._item_cfg(args)
+        hand = '左' if side == 'left_game' else '右'
+        m = cfg['brake.method']
+        if self.cfg['throttle.mode'] == 'B':
+            dest = 'vJoy SL1 に出す (B モード)'
+        elif m == 'pseudo':
+            dest = 'vJoy RZ (スロットル) から引く'
+        elif m == 'axis':
+            dest = 'vJoy {} に出す'.format(_axis_short(cfg['brake.axis']))
+        else:
+            dest = '{:.0f}% 以上で vJoy ボタン {} を押す'.format(cfg['brake.button_on'] * 100, cfg['brake.button'])
+        return 'ブレーキ: {}トリガーの引き具合を {} (選んでいる間ずっと)'.format(hand, dest)
+
+    # --- ブレーキ ---
+    def brake_frame(self, value, active, args, now):
+        """毎フレーム。active = ブレーキの項目を選んでいるか、value = その側のトリガーの値 0〜1。返り値 = 出すブレーキの量 0〜1。"""
+        cfg = self._item_cfg(args) if active else self.brake_cfg
+        dt = 0.0 if self._last_t is None else max(0.0, min(0.1, now - self._last_t))
+        self._last_t = now
+        target = 0.0
+        if active and value is not None:
+            x = (float(value) - cfg['brake.start']) / (cfg['brake.full'] - cfg['brake.start'])
+            x = max(0.0, min(1.0, x))
+            target = x ** cfg['brake.curve'] if x > 0.0 else 0.0
+        sm = cfg['brake.smooth_sec']
+        if sm <= 0.0:
+            self.brake = target
+        elif dt > 0.0:
+            self.brake += (target - self.brake) * (1.0 - math.exp(-dt / sm))
+        if target == 0.0 and self.brake < 0.002:
+            self.brake = 0.0
+        self.brake_cfg = cfg
+        was = self.brake_out
+        self.brake_out = self.brake * cfg['brake.max']
+        if self.brake_out > 0.0:
+            self.brake_peak = max(self.brake_peak, self.brake_out)
+        elif was > 0.0:
+            print("[Brake] 0 に戻った (いちばん強いとき {:.0f}%)".format(self.brake_peak * 100))
+            self.brake_peak = 0.0
+        return self.brake_out
+
+    # --- クルーズ ---
+    def cruise_target(self):
+        """クルーズで保つスロットルの値 0〜1。"""
+        if CRUISE_MODE_Power is not None:
+            try:
+                return max(0.0, min(1.0, float(CRUISE_MODE_Power)))
+            except Exception:
+                pass
+        if self.cruise_center:
+            return 0.5
+        return 0.5 if self.cruise_value is None else self.cruise_value
+
+    def _pct(self, v):
+        return '{:.0f}%'.format(max(0.0, min(1.0, v)) * 100)
+
+    def cruise_command(self, action, lever, now):
+        """CRUISE の項目をトリガーで実行した (半押しが成り立った)。返り値 = ログの文。"""
+        if not CRUISE_MODE_ENABLED:
+            return 'vJoy へは出さない (CRUISE_MODE_ENABLED = False)'
+        if action == 'toggle':
+            last = self._last_click
+            if last is None or now - last > self.cfg['cruise.double_click_sec']:
+                self._last_click = now
+                return 'もう一度すぐ引くとクルーズを{} (まだ vJoy へは出さない)'.format('切る' if self.cruise_on else '入れる')
+            self._last_click = None
+            action = 'off' if self.cruise_on else 'on'
+        if action == 'on':
+            if self.cruise_on:
+                return 'もうクルーズ中 (vJoy {} は {} のまま)'.format(self.throttle_axes_text(), self._pct(self.cruise_target()))
+            self.cruise_on = True
+            self.cruise_value = float(lever)
+            self._lever_at_on = float(lever)
+            return 'クルーズに入る: vJoy {} を {} に保つ{}'.format(
+                self.throttle_axes_text(), self._pct(self.cruise_target()), ' (センター)' if self.cruise_center else '')
+        if action == 'off':
+            return self.cruise_off('トリガー')
+        return self.toggle_center()
+
+    def cruise_off(self, why):
+        if not self.cruise_on:
+            return 'クルーズ中ではない (vJoy へは出さない)'
+        v = self.cruise_target()
+        self.cruise_on = False
+        self._events.append(('lever_to', v))
+        return 'クルーズを切る ({}): vJoy {} はスロットルに戻す ({} から続ける)'.format(why, self.throttle_axes_text(), self._pct(v))
+
+    def toggle_center(self):
+        self.cruise_center = not self.cruise_center
+        mode = 'センター (50%、CRUISE C)' if self.cruise_center else '標準 (入ったときの値を保つ)'
+        if self.cruise_on:
+            return 'クルーズを{}に切り替え: vJoy {} を {} に'.format(mode, self.throttle_axes_text(), self._pct(self.cruise_target()))
+        return '次のクルーズは{} (vJoy へはまだ出さない)'.format(mode)
+
+    def cruise_tilt(self, now, key):
+        """CRUISE ('toggle') の項目へスティックを倒した。2 回目なら標準 / センターを切り替えて、ログの文を返す。"""
+        last = self._last_tilt
+        if last is not None and last[1] == key and now - last[0] <= self.cfg['cruise.double_tilt_sec']:
+            self._last_tilt = None
+            return self.toggle_center()
+        self._last_tilt = (now, key)
+        return None
+
+    def check_move(self, lever, grabbed):
+        """cruise.exit_on_move: つかんだスロットルを入ったときから大きく動かしたらクルーズを切る。切ったらログの文。"""
+        lim = self.cfg['cruise.exit_on_move']
+        if not self.cruise_on or lim is None or not grabbed or self._lever_at_on is None:
+            return None
+        if abs(float(lever) - self._lever_at_on) < lim:
+            return None
+        self.cruise_on = False
+        return 'スロットルを動かしたのでクルーズを切る: vJoy {} はスロットルの値 ({}) に戻す'.format(self.throttle_axes_text(), self._pct(lever))
+
+    def pop_events(self):
+        ev, self._events = self._events, []
+        return ev
+
+    # --- 出力 ---
+    def throttle_outputs(self, lever):
+        """今のレバーの値から、vJoy に出す値を返す: {'rz': 0〜1, 'sl0': 0〜1 か None, 'sl1': 0〜1 か None,
+        'axis': (軸の名前, 0〜1) か None, 'buttons': [(番号, 押す / 離す), ...] (変わったときだけ), 'hud_throttle': HUD のバーの値}。"""
+        thr = self.cruise_target() if self.cruise_on else float(lever)
+        out = {'rz': thr, 'sl0': None, 'sl1': None, 'axis': None, 'buttons': [], 'hud_throttle': thr}
+        b = self.brake_out
+        cfg = self.brake_cfg
+        want = None
+        if self.cfg['throttle.mode'] == 'B':
+            if self.cfg['throttle.b_center_neutral']:
+                acc = max(0.0, (thr - 0.5) * 2.0)
+                lever_brake = max(0.0, (0.5 - thr) * 2.0)
+            else:
+                acc, lever_brake = thr, 0.0
+            out['sl0'] = acc
+            out['sl1'] = max(lever_brake, b)
+        else:
+            m = cfg['brake.method']
+            if m == 'pseudo':
+                out['rz'] = max(0.0, thr - b)
+                out['hud_throttle'] = out['rz']
+            elif m == 'axis':
+                out['axis'] = (cfg['brake.axis'], b)
+            else:
+                th = cfg['brake.button_on']
+                num = int(cfg['brake.button'])
+                on = (b >= th * 0.8) if self._btn == num else (b >= th)
+                want = num if (on and b > 0.0) else None
+        if want != self._btn:
+            if self._btn is not None:
+                out['buttons'].append((self._btn, False))
+            if want is not None:
+                out['buttons'].append((want, True))
+            self._btn = want
+        return out
+
+    def release(self):
+        """押しているブレーキのボタンを離す指示 (プロファイルの切り替えの前)。返り値 = [(番号, False)]。"""
+        if self._btn is None:
+            return []
+        b, self._btn = self._btn, None
+        return [(b, False)]
+
+    def status_lines(self):
+        lines = [self.summary()]
+        lines.append("[Assist] ブレーキ {:.0f}% (方式 {})、クルーズ {}{}".format(
+            self.brake_out * 100, self._method_text(self.brake_cfg),
+            ('中 ' + self._pct(self.cruise_target())) if self.cruise_on else 'なし',
+            '、センター' if self.cruise_center else ''))
         return lines
 
 
@@ -6663,7 +7262,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         self._vbtn_state = {}          # vJoy ボタン番号 -> 押されているか (通知インジゲータ用)
         self.bus = None                # InputBus (INPUT_BUS_ENABLED = False か、作れなかったときは None)
         self.inputs = None             # InputLayer (0.1.21。INPUT_BINDINGS_ENABLED = False か、バスが無いときは None)
-        self.cruise_center = False     # センタークルーズ中か (クルーズモード実装時に使う。HUD は 'C' と表示)
+        self.cruise_center = False     # センタークルーズ中か (0.1.42 から DriveAssist.cruise_center を毎フレーム写す。HUD は 'C' と表示)
         self._hook_vjoy_buttons()
         self._make_input_layer()
 
@@ -6672,6 +7271,12 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         self.throttle_z = Throttle(size=0.3, inverted=True, sensitivity=1.0, enable_limiter=True)
         self.throttle_y = Throttle(size=0.2, sensitivity=1.0, enable_limiter=False)
         self.throttle_x = Throttle(size=90, sensitivity=1.0, enable_limiter=False)
+
+        if VC_GUI_AUTOSTART:
+            vc_gui_start()             # 0.1.42: PC の画面の窓 (ログ・設定・パネルの編集)
+        self.assist = None             # 0.1.42: ブレーキとクルーズ (DriveAssist)。プロファイルを読むたびに作り直す
+        self._hud_holds = {}           # 0.1.42: HUD の印を消すまでの時刻 (_hud_hold)
+        self._make_drive_assist()
 
         self.grabbable_x = Throttle(size=1, starting=0.5)
         self.grabbable_y = Throttle(size=1, starting=0.5)
@@ -6815,6 +7420,98 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         self.inputs.trigger_test = old.trigger_test
         print("[Input] プロファイルを切り替えました: {} ({})".format(prof['name'], nxt))
         self._print_input_layer()
+        self._make_drive_assist()          # 0.1.42: ブレーキとクルーズも新しい settings で作り直す (クルーズは切れる)
+
+    def _make_drive_assist(self):
+        """(0.1.42) DriveAssist をプロファイルの settings から作る。前のものがクルーズ中なら切って、スロットルをその値から続ける。
+        B モードなら SL0 / SL1 の元の割り当てを外す。作れなければ設定なし ([CONFIG] の値) で作る。"""
+        old = self.assist
+        if old is not None:
+            if old.cruise_on:
+                print("[Cruise] プロファイルを切り替えたのでクルーズを切ります")
+                self._throttle_lever_to(old.cruise_target())
+            self._drive_buttons(old.release())
+        settings = self.inputs.settings if self.inputs is not None else {}
+        try:
+            self.assist = DriveAssist(settings)
+        except Exception as e:
+            print("[Assist] Warning: プロファイルの設定でブレーキとクルーズを作れません。[CONFIG] の値で作ります: {}".format(e))
+            self.assist = DriveAssist({})
+        self._claimed_axes = set()
+        if self.assist.cfg['throttle.mode'] == 'B':
+            self._claim_axes(['HID_USAGE_SL0', 'HID_USAGE_SL1'], 'スロットル B モード')
+        print(self.assist.summary())
+
+    def _claim_axes(self, axes, why):
+        """(0.1.42) DriveAssist が書く軸の、元の 'vjoy_axis' の割り当てを外す (1 つの軸につき 1 回)。"""
+        new = [a for a in axes if a not in self._claimed_axes]
+        if not new:
+            return
+        self._claimed_axes.update(new)
+        if self.inputs is not None:
+            self.inputs.drop_axis_bindings(new, why)
+
+    def _throttle_lever_to(self, value):
+        """(0.1.42) スロットルの値を value (0〜1) にして、つかみ直しの基準も合わせる (クルーズを切ったときに出力が跳ばないように)。"""
+        t = getattr(self, 'throttle_z', None)
+        if t is None:
+            return
+        t.throttle_z = max(0.0, min(1.0, float(value))) * t.size
+        t.throttle_relative_zeroed = False          # 次の更新で、今の手の位置を基準にし直す
+        t._last_delta = 0.0
+        t._limiter_bypassed = t.throttle_z > t.size * THROTTLE_ACCEL_LIMIT_RATIO   # リミッターの所で止めない
+
+    def _drive_buttons(self, changes):
+        for num, on in changes:
+            try:
+                if self.bus is not None:
+                    self.bus.set_button(num, on, 'brake')
+                else:
+                    self.device.set_button(num, on)
+            except Exception as e:
+                print("[Brake] Warning: vJoy ボタン {} を{}せん: {}".format(num, '押せま' if on else '離せま', e))
+
+    def _drive_frame(self, lever):
+        """(0.1.42) 毎フレーム: ブレーキの量を進め、クルーズとブレーキを入れたスロットルの出力を vJoy に書く。
+        返り値 = DriveAssist.throttle_outputs() の結果 (HUD の値に使う)。"""
+        a = self.assist
+        now = time.time()
+        value, active, args = None, False, None
+        if self.inputs is not None:
+            side, row = self.inputs.panel_brake_item()
+            if row is not None:
+                hand = 'left' if side == 'left_game' else 'right'
+                value = self.inputs.values.get(hand + '.trigger_value')
+                active = True
+                args = row.get('args')
+        a.brake_frame(value, active, args, now)
+        msg = a.check_move(lever, self.throttle_z.throttle_grabbed)
+        if msg:
+            print("[Cruise] " + msg)
+        for ev in a.pop_events():
+            if ev[0] == 'lever_to':
+                self._throttle_lever_to(ev[1])
+        self.throttle_z.cruise_active = a.cruise_on
+        self.cruise_center = a.cruise_center
+        out = a.throttle_outputs(self.throttle_z.x)
+        self.device.set_axis(HID_USAGE_RZ, self._clamp_vjoy(out['rz'] * 0x8000))
+        if out['sl0'] is not None:
+            self.device.set_axis(HID_USAGE_SL0, self._clamp_vjoy(out['sl0'] * 0x8000))
+        if out['sl1'] is not None:
+            self.device.set_axis(HID_USAGE_SL1, self._clamp_vjoy(out['sl1'] * 0x8000))
+        if out['axis'] is not None:
+            axis, v = out['axis']
+            self._claim_axes([axis], 'ブレーキの軸')
+            self.device.set_axis(globals()[axis], self._clamp_vjoy(v * 0x8000))
+        self._drive_buttons(out['buttons'])
+        return out
+
+    def _hud_hold(self, key, on, sec, now):
+        """(0.1.42) HUD の印を、on が消えてから sec 秒残す。"""
+        if on:
+            self._hud_holds[key] = now + sec
+            return True
+        return now < self._hud_holds.get(key, 0.0)
 
     def _input_frame(self, left_ctr, right_ctr):
         """毎フレームの生の入力。InputLayer があればそこへ、無ければ 0.1.20 まで (VirtualPad.update が vJoy へ書く)。"""
@@ -7131,6 +7828,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ('input_profile_next', "入力の仮想化: profiles/ の中の次のプロファイル (割り当てとトリガーの設定) に切り替える"),
         ('trigger_test', "入力の仮想化: トリガーの確かめ用の仮の割り当てを なし → 引き切りだけ → 半押しと引き切り の順に (ゲームへは出さない。[TRG] のログ)"),
         ('bus_status', "入力の仮想化: 出力のバス (InputBus) と InputLayer の今の状態を 1 回表示する (押下中のボタンと経路、軸、POV、書き込み回数、押している入力)"),
+        ('drive_status', "(0.1.42) ブレーキとクルーズとスロットルの出し方 (DriveAssist) の今の設定と状態を 1 回表示する"),
         ('dpad_debug', "Q29-3 調査用: スティックと VirtualDPad の数値の段を出す / 隠す"),
         ('dpad_log', "Q29-3 調査用: VirtualDPad の方向が変わるたびの [DPAD] の1行ログを出す / 止める"),
         ('hud_late_shift_toggle', "HUD 揺れ調査用: 'fakefar' のずらし (HUD_LATE_SHIFT) を入 / 切"),
@@ -7219,6 +7917,9 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 print("[TRG] InputLayer を使っていないので確かめられません (INPUT_BINDINGS_ENABLED = False)")
             else:
                 self.inputs.cycle_trigger_test()
+        elif name == 'drive_status':
+            for line in self.assist.status_lines():
+                print(line)
         elif name == 'bus_status':
             if self.bus is None:
                 print("[Bus] InputBus は使っていません (INPUT_BUS_ENABLED = False)。直接書き込みです")
@@ -7463,7 +8164,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         self.throttle_y.update(thr_y)
         self.throttle_x.update(left_ctr.yaw)
 
-        self.device.set_axis(HID_USAGE_RZ, self._clamp_vjoy(self.throttle_z.x * 0x8000))
+        drive = self._drive_frame(self.throttle_z.x)                   # 0.1.42: RZ (と B モードの SL0 / SL1) はクルーズとブレーキを入れて書く
         self.device.set_axis(HID_USAGE_RY, self._clamp_vjoy(self.throttle_y.x * 0x8000))
         self.device.set_axis(HID_USAGE_RX, self._clamp_vjoy(self.throttle_x.x * 0x8000))
 
@@ -7487,8 +8188,16 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             hud_yaw = (az - 0.5) * 2.0
             if self.hud_swap_yaw_roll:
                 hud_yaw, hud_roll = hud_roll, hud_yaw
+            now = time.time()
+            has_left = self.inputs is not None and 'left_game' in (self.inputs.panels or {})
+            mnvr_on = self._hud_hold('mnvr_app_menu', HUD_BMARK_APP_MENU_FALLBACK and not has_left and self.left_app_menu_pressed,
+                                     HUD_MNVR_HOLD_SEC, now)
+            if self.inputs is not None:
+                mnvr_on = self.inputs.hud_mark('mnvr', now) or mnvr_on
+            brake_on = self._hud_hold('brake', self.assist.brake_out > 0.01,
+                                      HUD_BRAKE_HOLD_SEC, now) or (self.inputs is not None and self.inputs.hud_mark('brake', now))
             self.hud.update_hud_state(
-                throttle_val=self.throttle_z.x,
+                throttle_val=drive['hud_throttle'],                        # 0.1.42: ゲームへ出す値 (クルーズ・疑似ブレーキの後)
                 pitch_val=(ay - 0.5) * 2.0,
                 roll_val=hud_roll,
                 yaw_val=hud_yaw,
@@ -7498,14 +8207,16 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 signals={'sig:throttle_over_limit': is_over_limit,
                          'sig:stick_grab': self._joystick_grabbed,
                          'sig:throttle_grab': self.throttle_z.throttle_grabbed,
-                         'sig:cruise': bool(CRUISE_MODE_ENABLED),
+                         'sig:cruise': bool(self.assist.cruise_on),
+                         'sig:mnvr': mnvr_on,
+                         'sig:brake': brake_on,
                          'sig:dpad_debug': self.dpad_debug_hud,
                          'sig:trigger_zone': trg_active,
                          'sig:panel': pnl_values is not None},
                 buttons=self._vbtn_state,
                 values={'throttle': self.throttle_z.x,
-                        'cruise_power': CRUISE_MODE_Power if CRUISE_MODE_Power is not None else self.throttle_z.x,
-                        'cruise_center': self.cruise_center,
+                        'cruise_power': self.assist.cruise_target() if self.assist.cruise_on else self.throttle_z.x,
+                        'cruise_center': self.assist.cruise_center,
                         'dbg': self._dpad_debug_values(left_ctr, right_ctr) if self.dpad_debug_hud else None,
                         'trg': trg_values, 'pnl': pnl_values}
             )
