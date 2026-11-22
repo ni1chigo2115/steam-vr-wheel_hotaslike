@@ -147,6 +147,15 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     通知の段の部品に 'on' (その信号の間だけ見せる。場所は空けておく) を足した。
     パネルの実行のログに、vJoy へ何を出すか (ボタン何番を押す / 離す、出さない) を書くようにした。
     PC の画面の窓 VC コンソール (vc_gui.py) を足した。VC_GUI_AUTOSTART で起動時に別のプロセスとして開く。ログは VC_LOG_FILE に書く。
+  0.1.43: 実機確認 (2026-11-22) の 4 点。
+    (1) クルーズ中もスロットルをつかめば一時的に加減速できる ('cruise.adjust' = 'temporary'。離すとクルーズの値に戻る)。
+        'set' = 離したところを新しいクルーズの値にする / 'locked' = 0.1.42 と同じ (動かしても変わらない)。
+    (2) 項目の "latch": false = スティックを中央に戻すと選びが消え、その前に選んでいた項目へ戻る (右パネルの TGT など)。
+        パネル全体の "latch": false も書ける (既定 true = 01 の 3.1 のラッチ式)。
+    (3) コンフィグモード (ConfigMode。決まりはその節の説明): 両スティックを上に CONFIG_GESTURE_SEC 倒したままで出入りする。
+        左 = コンフィグメニュー (プログラムが持つ 8 項目固定のパネル)、右 = 選んだ設定の値を変える補助。ゲームへの出力は止める。
+        パネルの項目の命令 'config' でも入れる。変えた値は users/ のファイルに自動で保存し、次からも使う。
+    (4) 01 の 3.4: 左スティックを倒している間は、右パネルを動かさない (RIGHT_PANEL_BLOCKED_BY_LEFT)。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -250,7 +259,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.42'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.43'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -624,10 +633,22 @@ def hud_row_panel():
             'parts': [{'text_fn': hud_text_panel, 'reserve': 'L main/cruise sel 8   R main sel 8', 'align': 'left'}]}
 
 
+def hud_text_config(v):
+    return v.get('cfg') or ''
+
+
+def hud_row_config():
+    """(0.1.43) コンフィグの段。出入りの操作の間は進み具合 (黄色)、コンフィグ中は今の項目と値。"""
+    return {'id': 'cfg', 'on': ['sig:config', 'sig:config_gesture'],
+            'color_rules': [{'when': ['sig:config_gesture'], 'color': HUD_COLOR_YELLOW}],
+            'parts': [{'text_fn': hud_text_config, 'reserve': 'CONFIG BRAKE SMOOTH 0.00S', 'align': 'left'}]}
+
+
 HUD_FONT_TEST = True                       # [CONFIG] フォント確認用の段を出す (確認が終わったら False)
 HUD_NOTICE_ROWS = [                        # [CONFIG] 上から並べる順番
     hud_row_bmark(),
     hud_row_cruise(),
+    hud_row_config(),
 ] + ([hud_row_clock()] if HUD_CLOCK_ENABLED else []) + ([hud_row_trigger()] if TRIGGER_HUD else []) + ([hud_row_panel()] if PANEL_HUD else []) + hud_rows_dpad_debug() + (hud_rows_font_test() if HUD_FONT_TEST else [])   # 数値の段をアイコンの段より上に (DPAD2)
 
 # --- 半透明の薄板 (HUD表示部分だけの裏に敷く。ゲーム画面は隠さない) -----------------------
@@ -5975,8 +5996,93 @@ def load_input_profile(path):
         bindings = [b for b in bindings if b[0] not in drop]
         print("[Input] {}: input.unbind で {} 行の割り当てを外しました ({})".format(
             os.path.basename(path), before - len(bindings), ', '.join(sorted(drop))))
-    return {'name': name, 'bindings': bindings, 'settings': settings, 'path': path,
+    base_settings = dict(settings)
+    over = load_user_settings(path)                       # 0.1.43: コンフィグメニューで変えた値 (users/profiles/<名前>.json)
+    if over:
+        settings = dict(settings)
+        settings.update(over)
+        print("[Config] {}: users/ に保存した設定を {} 個重ねました ({})".format(
+            os.path.basename(path), len(over), ', '.join(sorted(over.keys()))))
+    return {'name': name, 'bindings': bindings, 'settings': settings, 'path': path, 'settings_base': base_settings,
+            'id': str(prof.get('id') or os.path.basename(path)),
             'panels': read_panel_definitions(data.get('panels'))}   # 0.1.29
+
+
+# --- (0.1.43) ユーザーの設定ファイル (users/) ------------------------------------------------------------------
+# 01 の 3.5: 変えた設定は自動でユーザーの JSON に保存し、以後それを使う。置き場所はリポジトリ直下の users/ (書けなければ media/users/)。
+#   users/profiles/<プロファイルのファイル名>  {"format": "vc-user-settings", "format_version": 1, "settings": {...}}
+#       プロファイルの settings に重ねる (プロファイルのファイルは書き換えない)。コンフィグメニューの「既定に戻す」でキーを消す。
+#   users/vc_user.json  プロファイルによらない設定 ('hud.mode' など)。
+USERS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'users')   # [CONFIG] (0.1.43) ユーザーの設定の置き場所
+USERS_DIR_FALLBACK = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'media', 'users')
+
+
+def _users_dir():
+    for d in (USERS_DIR, USERS_DIR_FALLBACK):
+        try:
+            if not os.path.isdir(d):
+                os.makedirs(d)
+            return d
+        except Exception:
+            continue
+    return None
+
+
+def _user_json_path(kind, profile_path=None):
+    d = _users_dir()
+    if d is None:
+        return None
+    if kind == 'profile':
+        return os.path.join(d, 'profiles', os.path.basename(profile_path or 'none.json'))
+    return os.path.join(d, 'vc_user.json')
+
+
+def _read_user_json(path):
+    try:
+        if path and os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get('settings'), dict):
+                return dict(data['settings'])
+    except Exception as e:
+        print("[Config] Warning: {} を読めません: {}".format(path, e))
+    return {}
+
+
+def _write_user_json(path, settings):
+    try:
+        d = os.path.dirname(path)
+        if not os.path.isdir(d):
+            os.makedirs(d)
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump({'format': 'vc-user-settings', 'format_version': 1, 'settings': settings}, f,
+                      ensure_ascii=False, indent=2, sort_keys=True)
+        if os.path.exists(path):
+            os.remove(path)
+        os.rename(tmp, path)
+        return True
+    except Exception as e:
+        print("[Config] Warning: {} に書けません: {}".format(path, e))
+        return False
+
+
+def load_user_settings(profile_path=None):
+    """(0.1.43) profile_path があればそのプロファイルの上書き、無ければ vc_user.json の settings。"""
+    return _read_user_json(_user_json_path('profile' if profile_path else 'user', profile_path))
+
+
+def save_user_setting(key, value, profile_path=None, remove=False):
+    """(0.1.43) 1 つの値を保存する (remove = True ならキーを消す)。返り値 = 書いたファイル (書けなければ None)。"""
+    path = _user_json_path('profile' if profile_path else 'user', profile_path)
+    if path is None:
+        return None
+    s = _read_user_json(path)
+    if remove:
+        s.pop(key, None)
+    else:
+        s[key] = value
+    return path if _write_user_json(path, s) else None
 
 
 def list_input_profiles():
@@ -6074,7 +6180,11 @@ def _read_panel_side(side, is_left):
                     fname, slot, n, n))
         folders[fname] = rows
     _check_panel_folders(root, folders)
-    return {'root': root, 'folders': folders}
+    latch = side.get('latch', True)                        # 0.1.43
+    if not isinstance(latch, bool):
+        print("[Panel] Warning: パネルの latch は true か false で書いてください (今の値 {!r})。true を使います".format(latch))
+        latch = True
+    return {'root': root, 'folders': folders, 'latch': latch}
 
 
 def read_panel_definitions(raw):
@@ -6105,6 +6215,8 @@ class PanelState(object):
         self.root = defs['root']
         self.folders = defs['folders']
         self.stack = [self.root]        # 今いる階層の道 (先頭 = ルート)
+        self.latch = bool(defs.get('latch', True))   # 0.1.43: False = スティックを中央に戻すと選びが消える (パネル全体の既定)
+        self.latched = None             # 0.1.43: 最後に選んだ「残る」項目 (latch: false の項目から戻るときの行き先)
         self.selected = None            # 選んでいるスロット (文字列)、無ければ None
 
     def table(self):
@@ -6176,7 +6288,7 @@ PANEL_STICK_RELEASE = 0.45   # [CONFIG] (0.1.35) 一度倒したあと、これ�
 PANEL_PRESS_SEC = 0.10       # [CONFIG] (0.1.34) パネルの項目でボタンを出すとき、押している時間 [秒] (0.1.41: 押しっぱなしのときは、これが最短の時間)
 PANEL_ITEM_HOLD = True       # [CONFIG] (0.1.41) True = 実行した操作 (トリガーの半押し / スティックを倒したまま) を続けている間、項目のボタンを押したままにする。
                              #   False = 0.1.40 まで (PANEL_PRESS_SEC だけ押して離す)。項目ごとに "hold": true / false でも決められる
-PANEL_ITEM_COMMANDS = ('vjoy_button', 'brake', 'cruise')   # (0.1.34) パネルの項目に書ける命令 (0.1.42: 'brake' と 'cruise' は DriveAssist)
+PANEL_ITEM_COMMANDS = ('vjoy_button', 'brake', 'cruise', 'config')   # (0.1.34) パネルの項目に書ける命令 (0.1.42: 'brake' と 'cruise' は DriveAssist。0.1.43: 'config' = コンフィグモードへ)
 PANEL_ITEM_HUD_MARKS = ('mnvr', 'brake')  # (0.1.42) 項目の "hud" に書ける印 (そのボタンを押している間 'sig:<印>' が入る)
 
 
@@ -6336,6 +6448,9 @@ class InputLayer(object):
         self.profile_path = profile['path'] if profile else None
         settings = (profile or {}).get('settings') or {}
         self.settings = dict(settings)                              # 0.1.42: DriveAssist も読む
+        self.settings_base = dict((profile or {}).get('settings_base') or settings)   # 0.1.43: users/ の上書き前 (既定に戻す用)
+        self.config_mode = False          # 0.1.43: True の間 (コンフィグモード) は、割り当ての命令を呼ばない (ゲームへ出さない)
+        self.panel_frozen = False         # 0.1.43: True の間 (両スティックを上に倒している) は、パネルを選ばず実行もしない
         self.thresholds = self._read_thresholds(settings)          # (半押し, 引き切り, 解除)
         self.trigger_button_from = settings.get('input.trigger_button_from', TRIGGER_BUTTON_FROM)
         self.trigger_mode = settings.get('input.trigger_mode', TRIGGER_MODE)                    # 0.1.28
@@ -6405,6 +6520,18 @@ class InputLayer(object):
         known.update(['trigger_touch', 'trigger_value', 'trigger_half', 'trigger_full', 'stick_dir', 'pov_mode'])
         return rest in known or (rest.startswith('b') and rest[1:].isdigit())
 
+    def release_panel_buttons(self):
+        """(0.1.43) パネルの項目で押しているボタンを全部離す (コンフィグに入るとき)。"""
+        for due, cmd, name, args, hold, mark in list(getattr(self, '_panel_releases', [])):
+            try:
+                getattr(self, '_cmd_' + cmd)(name, False, args)
+                print("[Panel] {}: vJoy ボタン {} を離す (コンフィグへ)".format(name.replace('panel.', '', 1).replace('.', ' ', 1), args.get('button')))
+            except Exception as e:
+                print("[Panel] Warning: {} を離せません: {}".format(name, e))
+        self._panel_releases = []
+        for held in getattr(self, '_hud_mark_held', {}).values():
+            held.clear()
+
     def release_all(self):
         """(0.1.25) 押している入力を全部離す (プロファイルを切り替える前に、ボタンを押したままにしないため)。"""
         for name in sorted(self.values.keys()):
@@ -6432,7 +6559,7 @@ class InputLayer(object):
         ts = self.triggers[hand]
         old_zone = ts.zone_text()
         was_half, was_full = ts.half_on, ts.full_on
-        half_assigned = self._half_assigned(n_half) or self.trigger_test >= 2     # 0.1.33: パネルの選びで変わる
+        half_assigned = self._half_assigned(n_half) or self.trigger_test >= 2 or self.config_mode   # 0.1.33 / 0.1.43: コンフィグでは半押しで決定
         ts.update(value, half_assigned, n_full in self._bind or self.trigger_test >= 1, self.thresholds,
                   self.trigger_mode, time.time(), self.trigger_half_delay)
         if self.trigger_test and ts.zone_text() != old_zone:
@@ -6450,7 +6577,7 @@ class InputLayer(object):
         右の項目で exec が 'trigger' でないもの (既定 'tilt') は、倒した時点で実行する。
         一度中央 (遊びの中) に戻してから同じ向きに倒すと、同じ項目をもう一度実行する。"""
         self._panel_release_due()                    # 0.1.34
-        if not self.panels:
+        if not self.panels or self.panel_frozen:      # 0.1.43: 出入りの操作の間は選ばない
             return
         if not hasattr(self, '_panel_stick_out'):
             self._panel_stick_out = {}
@@ -6465,6 +6592,10 @@ class InputLayer(object):
                 if slot is None:
                     continue
             if slot is None:
+                if self._panel_stick_out.get(side) and ps.selected is not None and not self._panel_latches(ps):
+                    back = ps.latched if (ps.latched is not None and ps.selectable(ps.latched)) else None
+                    ps.select(back or '0')                # 0.1.43: latch: false の項目は、戻すと選びが消える (前の項目へ)
+                    print("[Panel] {}: 中央に戻したので選びを {} に戻す".format(side, back or '-'))
                 self._panel_stick_out[side] = False
                 continue
             was_out = self._panel_stick_out.get(side)
@@ -6474,11 +6605,19 @@ class InputLayer(object):
             if slot != ps.selected:
                 ps.select(slot)
                 print("[Panel] {}: 選ぶ {}".format(side, slot))
+                if self._panel_latches(ps):
+                    ps.latched = slot                # 0.1.43: 戻り先として覚える
             if not was_out:
                 self._panel_tilted(side, slot)       # 0.1.42: 中央から倒した瞬間 (クルーズの 2 回倒し)
             if side == 'right_game' and not self._panel_waits_trigger(side):
                 self._panel_run(side, 'tilt')
         self._panel_release_due()                    # 0.1.41: 中央に戻したフレームで、押しっぱなしの項目を離す
+
+    def _panel_latches(self, ps):
+        """(0.1.43) 今選んでいる項目は、スティックを戻しても残るか (項目の "latch"、無ければパネルの "latch"、既定 true)。"""
+        row = ps.table().get(ps.selected) if ps.selected is not None else None
+        v = row.get('latch', ps.latch) if row else ps.latch
+        return v is not False
 
     def _panel_tilted(self, side, slot):
         """(0.1.42) スティックを中央から倒した瞬間に呼ぶ。トリガーで実行する CRUISE の項目 ('toggle') へ 2 回倒したら、
@@ -6588,6 +6727,9 @@ class InputLayer(object):
         assist = getattr(self.owner, 'assist', None)
         if cmd == 'brake':
             return assist.brake_text(args, side) if assist is not None else 'vJoy へは出さない (ブレーキの仕組みが無い)'
+        if cmd == 'config':
+            self.owner._config_request = True       # 0.1.43: Joystick.update が次のフレームでコンフィグモードに入る
+            return 'コンフィグモードへ (vJoy へは出さない)'
         if cmd == 'cruise':
             action = str(args.get('action', 'toggle'))
             if action not in CRUISE_ACTIONS:
@@ -6717,6 +6859,8 @@ class InputLayer(object):
             return
         self.values[name] = value
         self.n_events += 1
+        if self.config_mode:
+            return                           # 0.1.43: コンフィグ中は値だけ持つ (ConfigMode が読む)
         if name in ('left.a', 'right.a') and self._a_blocked(name, value):
             return                           # 0.1.35: パネルの項目の block_a
         if self.trigger_test and (name.endswith('.trigger_half') or name.endswith('.trigger_full')):
@@ -6740,7 +6884,7 @@ class InputLayer(object):
         if not hasattr(self, '_panel_trigger_on'):
             self._panel_trigger_on = {}
         self._panel_trigger_on[side] = bool(value)       # 0.1.41: 押しっぱなしの項目は、これが False になるまで離さない
-        if not value:
+        if not value or self.panel_frozen:                # 0.1.43: 出入りの操作の間は実行しない (01 の 3.4、R2)
             return
         if side not in (self.panels or {}):
             print("[Panel] {} がプロファイルに無いので実行できません ({})".format(side, name))
@@ -6808,8 +6952,10 @@ class InputLayer(object):
 #                その項目へスティックを 2 回倒す (cruise.double_tilt_sec 以内) と、標準とセンターを切り替える。選ぶために倒した 1 回目も数える。
 #       'on' / 'off' / 'center'  1 回のトリガーで入る / 切る / 標準とセンターを切り替える (確かめ用。メニューにも使える)。
 #     入ったとき: 標準 = そのときのスロットルの値を保つ / センター = 50% (HUD は CRUISE C)。CRUISE_MODE_Power が数値ならその値。
-#     クルーズの間は、スロットルを動かしてもゲームへの出力はクルーズの値のまま (cruise.exit_on_move が数値なら、つかんだスロットルを
-#     入ったときからそれ以上動かすと切れる)。切ったとき、スロットルはクルーズの値から続く (Joystick がつかみ直しの基準を合わせるので跳ばない)。
+#     (0.1.43) クルーズの間にスロットルをつかむと、つかんだ瞬間にレバーをクルーズの値に合わせ、つかんでいる間はレバーの値を出す
+#     (cruise.adjust = 'temporary': 離すとクルーズの値に戻る / 'set': 離したところが新しいクルーズの値 / 'locked': 0.1.42 と同じく変わらない)。
+#     cruise.exit_on_move が数値なら、つかんだスロットルをつかんだときからそれ以上動かすと切れる。
+#     切ったとき、スロットルはクルーズの値から続く (Joystick がつかみ直しの基準を合わせるので跳ばない)。
 #     クルーズ中はスロットルのリミッターを止める。プロファイルを切り替えるとクルーズは切れる (DriveAssist を作り直す)。
 #   - スロットルの出し方 throttle.mode:
 #       'A' (既定) スロットル = RZ (今まで通り)。
@@ -6834,10 +6980,13 @@ BRAKE_BUTTON_ON = 0.5                      # [CONFIG] (0.1.42) 'button' のと�
 CRUISE_DOUBLE_CLICK_SEC = 0.40             # [CONFIG] (0.1.42) トリガーの 2 回の半押しの間がこれ以内ならダブルクリック [秒]。'cruise.double_click_sec'
 CRUISE_DOUBLE_TILT_SEC = 0.60              # [CONFIG] (0.1.42) スティックの 2 回の倒しの間がこれ以内なら、標準 / センターを切り替える [秒]。'cruise.double_tilt_sec'
 CRUISE_EXIT_ON_MOVE = None                 # [CONFIG] (0.1.42) None = ダブルクリックだけで切れる。数値 (0〜1) = つかんだスロットルをこれ以上動かしたら切れる。'cruise.exit_on_move'
+CRUISE_ADJUST = 'temporary'                # [CONFIG] (0.1.43) クルーズ中にスロットルをつかんで動かしたとき: 'temporary' = つかんでいる間だけレバーの値
+                                           #   (離すとクルーズの値に戻る) / 'set' = 離したところを新しいクルーズの値にする / 'locked' = 動かしても変わらない。'cruise.adjust'
 THROTTLE_MODES = ('A', 'B')
 BRAKE_METHODS = ('pseudo', 'axis', 'button')
 BRAKE_AXES = ('HID_USAGE_X', 'HID_USAGE_Y', 'HID_USAGE_Z', 'HID_USAGE_RX', 'HID_USAGE_RY', 'HID_USAGE_RZ', 'HID_USAGE_SL0', 'HID_USAGE_SL1')
 CRUISE_ACTIONS = ('toggle', 'on', 'off', 'center')
+CRUISE_ADJUSTS = ('temporary', 'set', 'locked')
 DRIVE_ASSIST_SETTINGS = [   # (settings の名前, [CONFIG] の変数名, 種類, 下限, 上限, 選べる値)
     ('throttle.mode', 'THROTTLE_MODE', 'choice', None, None, THROTTLE_MODES),
     ('throttle.b_center_neutral', 'THROTTLE_B_CENTER_NEUTRAL', 'bool', None, None, None),
@@ -6853,6 +7002,7 @@ DRIVE_ASSIST_SETTINGS = [   # (settings の名前, [CONFIG] の変数名, 種類
     ('cruise.double_click_sec', 'CRUISE_DOUBLE_CLICK_SEC', 'float', 0.1, 1.5, None),
     ('cruise.double_tilt_sec', 'CRUISE_DOUBLE_TILT_SEC', 'float', 0.1, 1.5, None),
     ('cruise.exit_on_move', 'CRUISE_EXIT_ON_MOVE', 'float_or_none', 0.0, 1.0, None),
+    ('cruise.adjust', 'CRUISE_ADJUST', 'choice', None, None, CRUISE_ADJUSTS),
 ]
 
 
@@ -7080,10 +7230,36 @@ class DriveAssist(object):
         return ev
 
     # --- 出力 ---
+    def adjust_grab(self, grabbed):
+        """(0.1.43) クルーズ中にスロットルをつかんだ / 離した。返り値 = レバーを合わせてほしい値 (無ければ None) とログの文。
+        つかんだ瞬間: レバーをクルーズの値に合わせる (出力が跳ばない)。離した瞬間: 'set' ならそこを新しいクルーズの値にする。"""
+        mode = self.cfg['cruise.adjust']
+        was = getattr(self, '_adjusting', False)
+        if not self.cruise_on or mode == 'locked':
+            self._adjusting = False
+            return None, None
+        if grabbed and not was:
+            self._adjusting = True
+            self._lever_at_on = self.cruise_target()
+            return self.cruise_target(), None
+        if not grabbed and was:
+            self._adjusting = False
+            if mode == 'set':
+                return ('set', None)
+            return self.cruise_target(), 'スロットルを離したのでクルーズの値 ({}) に戻す'.format(self._pct(self.cruise_target()))
+        return None, None
+
+    def adjust_set(self, lever):
+        """(0.1.43) 'set': 離したレバーの値を新しいクルーズの値にする (センターは外す)。"""
+        self.cruise_value = float(lever)
+        self.cruise_center = False
+        return 'クルーズの値を {} にした (スロットルを離したところ)'.format(self._pct(lever))
+
     def throttle_outputs(self, lever):
         """今のレバーの値から、vJoy に出す値を返す: {'rz': 0〜1, 'sl0': 0〜1 か None, 'sl1': 0〜1 か None,
-        'axis': (軸の名前, 0〜1) か None, 'buttons': [(番号, 押す / 離す), ...] (変わったときだけ), 'hud_throttle': HUD のバーの値}。"""
-        thr = self.cruise_target() if self.cruise_on else float(lever)
+        'axis': (軸の名前, 0〜1) か None, 'buttons': [(番号, 押す / 離す), ...] (変わったときだけ), 'hud_throttle': HUD のバーの値}。
+        (0.1.43) クルーズ中でも、つかんで一時調整している間はレバーの値。"""
+        thr = self.cruise_target() if (self.cruise_on and not getattr(self, '_adjusting', False)) else float(lever)
         out = {'rz': thr, 'sl0': None, 'sl1': None, 'axis': None, 'buttons': [], 'hud_throttle': thr}
         b = self.brake_out
         cfg = self.brake_cfg
@@ -7130,6 +7306,443 @@ class DriveAssist(object):
             ('中 ' + self._pct(self.cruise_target())) if self.cruise_on else 'なし',
             '、センター' if self.cruise_center else ''))
         return lines
+
+
+# ==============================================================================
+# コンフィグモード ConfigMode  (0.1.43)
+# ==============================================================================
+# ■ 決まり (正本は非公開の作業メモの「01 の 3.2・3.4・3.5」と「04 の 2 章」。ここはそれをコードにしたもの)
+#   - 出入り: 両スティックを上 (真上から CONFIG_GESTURE_ANGLE_DEG 以内、倒し量 CONFIG_GESTURE_MIN 以上) に CONFIG_GESTURE_SEC 保つ (Q6)。
+#     両方が上になった時点で候補にし、その間は左右のパネルの選び・移動・実行をまとめて止める (R2)。HUD の段に進み具合を出す。
+#     途中でどちらかが外れたら取り消し。出入りしたあとも取り消したあとも、両スティックが中央に戻るまで普通の入力に戻さない。
+#     十字キーモードの間は入れない。ゲームのパネルの項目 "command": "config" でも入れる。
+#   - 入ったとき: パネルの項目で押しているボタンと、押している入力を全部離す。その後は割り当ての命令を呼ばない (ゲームへ出さない)。
+#     CONFIG_HOLD_AXES なら、操縦桿とスロットルの軸は入ったときの値のまま (クルーズも続く)。ブレーキは効かせない。
+#   - 出たとき: ゲームのパネルの階層と選びはそのまま。スロットルのつかみ直しの基準を合わせ直す (跳ばないように)。
+#   - 左 = コンフィグメニュー (8 項目固定。ルートの 1 は何もしない予約、下の階層の 1 は戻る)。スティックで選ぶと選びは残る。
+#     フォルダと「戻る」は、倒したまま CONFIG_TILT_CONFIRM_SEC たつと動く (トリガー不要。出入りの操作とぶつからないよう少し待つ)。
+#     項目は左トリガーの半押しで実行する (選択肢の項目は次の値へ、動作の項目は実行、プロファイルは切り替え)。
+#   - 右 = 補助: 左で設定の項目を選んでいる間、その値の変え方を出す。選択肢 = 1〜n に値 / 数値 = 1 +小 2 -小 3 +大 4 -大 5 既定 6 元に戻す。
+#     倒したまま CONFIG_TILT_CONFIRM_SEC で 1 回実行 (中央に戻してまた倒すと、もう 1 回)。選びは戻すと消える。
+#   - 変えた値はすぐ効かせ、users/ のファイルに自動で保存する (プロファイルの settings は users/profiles/、HUD の見せ方は users/vc_user.json)。
+#     throttle.mode を変えたら、同じプロファイルを読み直す (元のトリガーの軸の割り当てを戻すため)。
+#   - プロファイルの一覧は自動で作る (2〜7 番、あふれたら 8 番 = 次へ)。切り替えたら PREV (直前の 1 件に戻す) が先頭に出る (Q26)。
+CONFIG_GESTURE_SEC = 1.5                   # [CONFIG] (0.1.43) 両スティックを上に保つ時間 [秒] (01 の 3.4 は 1〜2 秒)
+CONFIG_GESTURE_ANGLE_DEG = 30.0            # [CONFIG] (0.1.43) 真上からこの角度以内なら「上」
+CONFIG_GESTURE_MIN = 0.70                  # [CONFIG] (0.1.43) 「上」とみなす倒し量 (R2 の確かめの道具と同じ 0.7)
+CONFIG_TILT_CONFIRM_SEC = 0.25             # [CONFIG] (0.1.43) コンフィグのパネルで、倒しただけで動く項目の待ち [秒]
+CONFIG_HOLD_AXES = True                    # [CONFIG] (0.1.43) コンフィグ中、操縦桿とスロットルの軸を入ったときの値のままにする (False = 動かせる)
+RIGHT_PANEL_BLOCKED_BY_LEFT = True         # [CONFIG] (0.1.43) 左スティックを倒している間は右パネルを動かさない (01 の 3.4。出入りの操作と右パネルの 1 番がぶつからないように)
+
+
+def stick_is_up(x, y):
+    """(0.1.43) スティックが「上」か (出入りの操作用)。"""
+    if math.hypot(x, y) < CONFIG_GESTURE_MIN:
+        return False
+    return abs(math.degrees(math.atan2(x, y))) <= CONFIG_GESTURE_ANGLE_DEG
+
+
+class ConfigGesture(object):
+    """(0.1.43) 両スティックを上に保つ操作。state = 'idle' / 'hold' (候補、進み具合あり) / 'wait' (中央に戻るのを待つ)。"""
+
+    def __init__(self):
+        self.state = 'idle'
+        self.t0 = 0.0
+
+    @property
+    def frozen(self):
+        return self.state != 'idle'
+
+    def progress(self, now):
+        if self.state != 'hold':
+            return 0.0
+        return max(0.0, min(1.0, (now - self.t0) / max(0.01, CONFIG_GESTURE_SEC)))
+
+    def frame(self, lx, ly, rx, ry, now, allowed=True):
+        """毎フレーム。成り立ったら 'toggle' を返す。"""
+        both = allowed and stick_is_up(lx, ly) and stick_is_up(rx, ry)
+        if self.state == 'idle':
+            if both:
+                self.state, self.t0 = 'hold', now
+            return None
+        if self.state == 'hold':
+            if not both:
+                self.state = 'wait'
+                print("[Config] 出入りの操作を取り消しました (途中で離した)")
+                return None
+            if now - self.t0 >= CONFIG_GESTURE_SEC:
+                self.state = 'wait'
+                return 'toggle'
+            return None
+        if math.hypot(lx, ly) < PANEL_STICK_RELEASE and math.hypot(rx, ry) < PANEL_STICK_RELEASE:
+            self.state = 'idle'
+        return None
+
+
+class ConfigPanelState(PanelState):
+    """(0.1.43) コンフィグのパネル。8 項目固定 (01 の 3.2)。書いていない番号はエラーではなく、ただの空き (NONE)。"""
+
+    def slot_count(self):
+        return 8
+
+    def slot_kind(self, slot):
+        if len(self.stack) > 1 and slot == PANEL_BACK_SLOT:
+            return 'back'
+        row = self.table().get(slot)
+        if row is None:
+            return 'none'
+        return PanelState.slot_kind(self, slot)
+
+
+CONFIG_CHOICES = {
+    'hud.mode': ['fakefar', 'far', 'plate'],
+    'throttle.mode': list(THROTTLE_MODES),
+    'brake.method': list(BRAKE_METHODS),
+    'cruise.adjust': list(CRUISE_ADJUSTS),
+}
+CONFIG_NUMBERS = {   # 名前: (小さい刻み, 大きい刻み, 下限, 上限, 見せ方)
+    'brake.max': (0.05, 0.20, 0.0, 1.0, 'pct'),
+    'brake.curve': (0.1, 0.5, 0.2, 5.0, 'num'),
+    'brake.smooth_sec': (0.02, 0.10, 0.0, 1.0, 'sec'),
+}
+CONFIG_LABELS = {'hud.mode': 'HUD MODE', 'throttle.mode': 'THR MODE', 'brake.method': 'BRAKE TYPE', 'brake.max': 'BRAKE MAX',
+                 'brake.curve': 'BRAKE CURVE', 'brake.smooth_sec': 'BRAKE SMOOTH', 'cruise.adjust': 'CRUISE ADJ'}
+
+
+def config_value_text(key, v):
+    if v is None:
+        return '-'
+    spec = CONFIG_NUMBERS.get(key)
+    if spec:
+        if spec[4] == 'pct':
+            return '{:.0f}%'.format(float(v) * 100)
+        if spec[4] == 'sec':
+            return '{:.2f}S'.format(float(v))
+        return '{:.1f}'.format(float(v))
+    return str(v).upper()
+
+
+def config_menu_folders(profiles, has_prev):
+    """(0.1.43) コンフィグメニューの中身 (プログラムが持つ。プロファイルの JSON には書かない)。"""
+    f = {
+        'config': {
+            '2': {'label': 'HUD MODE', 'cfg': 'hud.mode'},
+            '3': {'label': 'PROFILE', 'folder': 'profile'},
+            '4': {'label': 'THROTTLE', 'folder': 'throttle'},
+            '5': {'label': 'POSITION', 'folder': 'position'},
+            '6': {'label': 'LOG', 'folder': 'log'},
+            '7': {'label': 'GAME', 'act': 'exit'},
+            '8': {'label': 'DEBUG', 'folder': 'debug'},
+        },
+        'throttle': {
+            '2': {'label': 'THR MODE', 'cfg': 'throttle.mode'},
+            '3': {'label': 'BRAKE TYPE', 'cfg': 'brake.method'},
+            '4': {'label': 'BRAKE MAX', 'cfg': 'brake.max'},
+            '5': {'label': 'BRAKE CURVE', 'cfg': 'brake.curve'},
+            '6': {'label': 'BRAKE SMOOTH', 'cfg': 'brake.smooth_sec'},
+            '7': {'label': 'CRUISE ADJ', 'cfg': 'cruise.adjust'},
+        },
+        'position': {
+            '2': {'label': 'RECENTER', 'act': 'cmd', 'cmd': 'hud_recenter'},
+            '3': {'label': 'HUD UP', 'act': 'cmd', 'cmd': 'hud_center_up'},
+            '4': {'label': 'HUD DOWN', 'act': 'cmd', 'cmd': 'hud_center_down'},
+            '5': {'label': 'HUD CENTER', 'act': 'cmd', 'cmd': 'hud_center_toggle'},
+        },
+        'log': {
+            '2': {'label': 'LOG SIZE', 'act': 'cmd', 'cmd': 'hud_log_cycle'},
+            '3': {'label': 'LOG CLEAR', 'act': 'cmd', 'cmd': 'hud_log_clear'},
+            '4': {'label': 'VERSION', 'act': 'cmd', 'cmd': 'version'},
+        },
+        'debug': {
+            '2': {'label': 'STATS', 'act': 'cmd', 'cmd': 'hud_stats'},
+            '3': {'label': 'DIAG', 'act': 'cmd', 'cmd': 'hud_diagnose'},
+            '4': {'label': 'BUS', 'act': 'cmd', 'cmd': 'bus_status'},
+            '5': {'label': 'DRIVE', 'act': 'cmd', 'cmd': 'drive_status'},
+            '6': {'label': 'TRG TEST', 'act': 'cmd', 'cmd': 'trigger_test'},
+            '7': {'label': 'PIVOT', 'act': 'cmd', 'cmd': 'pivot_calibration'},
+            '8': {'label': 'DPAD', 'act': 'cmd', 'cmd': 'dpad_debug'},
+        },
+    }
+    items = []
+    if has_prev:
+        items.append({'label': 'PREV', 'act': 'profile_prev'})
+    for name in profiles:
+        items.append({'label': os.path.splitext(name)[0].replace('_', ' ').upper(), 'act': 'profile', 'file': name})
+    page, k = 'profile', 1
+    while True:
+        table = {}
+        chunk, items = items[:6], items[6:]
+        for i, it in enumerate(chunk):
+            table[str(i + 2)] = it
+        if items:
+            k += 1
+            nxt = 'profile{}'.format(k)
+            if len(items) == 1:
+                table['8'] = items.pop(0)          # 1 つだけ余ったら 8 番に置く (次の階層を作らない)
+                f[page] = table
+                break
+            table['8'] = {'label': 'NEXT', 'folder': nxt}
+            f[page] = table
+            page = nxt
+            continue
+        f[page] = table
+        break
+    return f
+
+
+class ConfigMode(object):
+    """(0.1.43) コンフィグモード (上の説明)。Joystick が 1 つ持つ。owner = Joystick。"""
+
+    def __init__(self, owner):
+        self.owner = owner
+        self.active = False
+        self.gesture = ConfigGesture()
+        self.left = None
+        self.right = None             # 補助のパネル (無ければ None)
+        self._right_for = None        # 補助が何の項目のためか (スロットの道)
+        self._undo = {}               # 項目を選んだときの値 (元に戻す用)
+        self._tilt = {}               # 'left' / 'right' -> [スロット, 倒した時刻, 実行したか]
+        self._trg = {'left': False, 'right': False}
+        self.prev_profile = None      # 直前のプロファイルのファイル名 (PREV)
+        self._message = ''
+
+    # --- 出入り ---
+    def toggle(self):
+        if self.active:
+            self.exit()
+        else:
+            self.enter()
+
+    def enter(self):
+        js = self.owner
+        inp = js.inputs
+        if inp is None:
+            print("[Config] InputLayer が無いのでコンフィグモードに入れません")
+            return
+        inp.release_panel_buttons()
+        inp.release_all()
+        inp.config_mode = True
+        self.active = True
+        self._build_left(keep=True)
+        self._trg = {'left': True, 'right': True}   # 入ったときに押していたトリガーは、一度離すまで使わない
+        self._tilt = {}
+        print("[Config] コンフィグモードに入りました (ゲームへの出力を止めます。両スティックを上に {:.1f} 秒で戻る)".format(CONFIG_GESTURE_SEC))
+
+    def exit(self):
+        js = self.owner
+        self.active = False
+        self.right = None
+        self._right_for = None
+        if js.inputs is not None:
+            js.inputs.config_mode = False
+        for t in (getattr(js, 'throttle_z', None), getattr(js, 'throttle_y', None), getattr(js, 'throttle_x', None)):
+            if t is not None:
+                t.throttle_relative_zeroed = False       # つかみ直しの基準を合わせ直す (軸が跳ばないように)
+        print("[Config] ゲームのパネルに戻りました")
+
+    # --- パネル ---
+    def _build_left(self, keep=True):
+        names = list_input_profiles()
+        folders = config_menu_folders(names, self.prev_profile is not None)
+        old = self.left
+        self.left = ConfigPanelState('config', {'root': 'config', 'folders': folders})
+        if keep and old is not None and all(s in folders for s in old.stack):
+            self.left.stack = list(old.stack)
+            self.left.selected = old.selected if old.selected in folders.get(old.stack[-1], {}) else None
+        self._sync_right()
+
+    def panels(self):
+        out = {'left_game': self.left}
+        if self.right is not None:
+            out['right_game'] = self.right
+        return out
+
+    def _left_row(self):
+        ps = self.left
+        if ps is None or ps.selected is None or ps.slot_kind(ps.selected) != 'item':
+            return None
+        return ps.table().get(ps.selected)
+
+    def _sync_right(self):
+        """左で選んでいる項目に合わせて補助のパネルを作り直す。"""
+        row = self._left_row()
+        key = row.get('cfg') if row else None
+        path = (tuple(self.left.stack), self.left.selected) if self.left else None
+        if key is None:
+            self.right, self._right_for = None, None
+            return
+        if path != self._right_for:
+            self._undo[key] = self.get_value(key)
+        self._right_for = path
+        v = self.get_value(key)
+        items = {}
+        if key in CONFIG_CHOICES:
+            for i, c in enumerate(CONFIG_CHOICES[key][:8]):
+                items[str(i + 1)] = {'label': str(c).upper(), 'set': c}
+        else:
+            small, big = CONFIG_NUMBERS[key][0], CONFIG_NUMBERS[key][1]
+            fmt = (lambda d: '{:+.0f}%'.format(d * 100)) if CONFIG_NUMBERS[key][4] == 'pct' else (lambda d: '{:+.2f}'.format(d))
+            items = {'1': {'label': fmt(small), 'step': small}, '2': {'label': fmt(-small), 'step': -small},
+                     '3': {'label': fmt(big), 'step': big}, '4': {'label': fmt(-big), 'step': -big},
+                     '5': {'label': 'DEFAULT', 'reset': True}, '6': {'label': 'UNDO', 'undo': True}}
+        title = '{} {}'.format(CONFIG_LABELS.get(key, key), config_value_text(key, v))
+        old_sel = self.right.selected if self.right is not None else None
+        self.right = ConfigPanelState('config_right', {'root': title, 'folders': {title: items}, 'latch': False})
+        self.right.selected = old_sel if old_sel in items else None
+
+    # --- 値 ---
+    def get_value(self, key):
+        js = self.owner
+        if key == 'hud.mode':
+            return getattr(js.hud, 'mode', None) if js.hud is not None else None
+        a = js.assist
+        return a.cfg.get(key) if a is not None else None
+
+    def _default_value(self, key):
+        js = self.owner
+        if key == 'hud.mode':
+            return HUD_DEPTH_MODE
+        base = js.inputs.settings_base if js.inputs is not None else {}
+        for k, cname, kind, lo, hi, choices in DRIVE_ASSIST_SETTINGS:
+            if k == key:
+                return _assist_setting(base, key, globals()[cname], kind, lo, hi, choices)
+        return None
+
+    def set_value(self, key, v, reset=False):
+        js = self.owner
+        old = self.get_value(key)
+        if key == 'hud.mode':
+            if js.hud is None or not js.hud.set_mode(v):
+                print("[Config] HUD MODE を {} にできません".format(config_value_text(key, v)))
+                return
+            path = save_user_setting(key, v, None, remove=reset)
+        else:
+            prof = js.inputs.profile_path if js.inputs is not None else None
+            path = save_user_setting(key, v, prof, remove=reset) if prof else None
+            if key == 'throttle.mode':
+                js.input_profile_load(os.path.basename(prof), keep_prev=True)   # 元の軸の割り当てを戻すため読み直す
+                js.inputs.config_mode = True
+            elif js.assist is not None:
+                js.assist.cfg[key] = v
+                js.assist._item_cache = {}
+                js.assist.brake_cfg = js.assist.cfg
+        print("[Config] {} {} → {}{} ({})".format(CONFIG_LABELS.get(key, key), config_value_text(key, old), config_value_text(key, v),
+                                                   ' (既定)' if reset else '',
+                                                   ('{} に保存'.format(os.path.relpath(path, os.path.dirname(USERS_DIR)))) if path else '保存できなかった'))
+        self._sync_right()
+
+    def _apply_right(self, row, key):
+        v = self.get_value(key)
+        if 'set' in row:
+            self.set_value(key, row['set'])
+        elif row.get('reset'):
+            self.set_value(key, self._default_value(key), reset=True)
+        elif row.get('undo'):
+            if key in self._undo:
+                self.set_value(key, self._undo[key])
+        elif 'step' in row and v is not None:
+            small, big, lo, hi, _ = CONFIG_NUMBERS[key]
+            nv = round(max(lo, min(hi, float(v) + float(row['step']))), 4)
+            if nv != v:
+                self.set_value(key, nv)
+
+    def _run_left(self):
+        js = self.owner
+        ps = self.left
+        slot = ps.selected
+        kind = ps.slot_kind(slot) if slot else 'none'
+        if kind in ('folder', 'back'):
+            self._move(ps)
+            return
+        row = self._left_row()
+        if row is None:
+            return
+        key = row.get('cfg')
+        act = row.get('act')
+        if key in CONFIG_CHOICES:
+            ch = CONFIG_CHOICES[key]
+            v = self.get_value(key)
+            self.set_value(key, ch[(ch.index(v) + 1) % len(ch)] if v in ch else ch[0])
+        elif key is not None:
+            print("[Config] {}: 右スティックで値を変えます".format(row.get('label')))
+        elif act == 'exit':
+            self.gesture.state = 'wait'
+            self.exit()
+        elif act == 'cmd':
+            print("[Config] 実行 {} ({})".format(row.get('label'), row.get('cmd')))
+            js.debug_command(row.get('cmd'))
+        elif act in ('profile', 'profile_prev'):
+            name = self.prev_profile if act == 'profile_prev' else row.get('file')
+            if name:
+                js.input_profile_load(name)
+                if js.inputs is not None:
+                    js.inputs.config_mode = True
+                self._build_left(keep=True)
+
+    def _move(self, ps):
+        kind, what = ps.execute()
+        if kind == 'enter':
+            print("[Config] フォルダ '{}' に入る".format(what))
+        elif kind == 'back':
+            print("[Config] 戻る (今 '{}')".format(ps.stack[-1]))
+        self._sync_right()
+
+    # --- 毎フレーム ---
+    def frame(self, lx, ly, rx, ry, now):
+        js = self.owner
+        inp = js.inputs
+        if inp is None or self.left is None:
+            return
+        # 左: 選ぶ。フォルダと戻るは倒したまま待つと動く
+        for hand, ps, x, y in (('left', self.left, lx, ly), ('right', self.right, rx, ry)):
+            t = self._tilt.get(hand)
+            if ps is None:
+                self._tilt[hand] = None
+                continue
+            dz = PANEL_STICK_RELEASE if t else PANEL_STICK_DEADZONE
+            slot = panel_slot_from_stick(x, y, 8, dz)
+            if slot is None:
+                self._tilt[hand] = None
+                if hand == 'right' and ps.selected is not None:
+                    ps.selected = None                  # 補助は戻すと消える
+                continue
+            if not ps.selectable(slot):
+                continue
+            if t is None or t[0] != slot:
+                self._tilt[hand] = [slot, now, False]
+                if ps.selected != slot:
+                    ps.select(slot)
+                    if hand == 'left':
+                        self._sync_right()
+                continue
+            if t[2] or now - t[1] < CONFIG_TILT_CONFIRM_SEC:
+                continue
+            t[2] = True
+            if hand == 'left':
+                if ps.slot_kind(slot) in ('folder', 'back'):
+                    self._move(ps)
+            else:
+                row = ps.table().get(slot)
+                key = self._left_row().get('cfg') if self._left_row() else None
+                if row is not None and key is not None:
+                    self._apply_right(row, key)
+        # 左トリガーの半押し = 左の項目を実行
+        for hand in ('left', 'right'):
+            on = bool(inp.values.get(hand + '.trigger_half'))
+            if on and not self._trg[hand] and hand == 'left':
+                self._run_left()
+            self._trg[hand] = on
+
+    def hud_text(self, now):
+        if self.gesture.state == 'hold':
+            return '{} CONFIG {:.0f}%'.format('EXIT' if self.active else 'ENTER', self.gesture.progress(now) * 100)
+        if not self.active:
+            return ''
+        row = self._left_row()
+        key = row.get('cfg') if row else None
+        if key:
+            return 'CONFIG {} {}'.format(CONFIG_LABELS.get(key, key), config_value_text(key, self.get_value(key)))
+        return 'CONFIG'
 
 
 # ==============================================================================
@@ -7274,6 +7887,9 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
 
         if VC_GUI_AUTOSTART:
             vc_gui_start()             # 0.1.42: PC の画面の窓 (ログ・設定・パネルの編集)
+        self.cfgmode = ConfigMode(self)  # 0.1.43: コンフィグモード
+        self._config_request = False   # 0.1.43: パネルの項目 'config' で入る
+        self._user_applied = False     # 0.1.43: users/vc_user.json を HUD に効かせたか
         self.assist = None             # 0.1.42: ブレーキとクルーズ (DriveAssist)。プロファイルを読むたびに作り直す
         self._hud_holds = {}           # 0.1.42: HUD の印を消すまでの時刻 (_hud_hold)
         self._make_drive_assist()
@@ -7410,17 +8026,29 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             return
         cur = os.path.basename(self.inputs.profile_path) if self.inputs.profile_path else None
         nxt = names[(names.index(cur) + 1) % len(names)] if cur in names else names[0]
-        prof = load_input_profile(nxt)
+        self.input_profile_load(nxt)
+
+    def input_profile_load(self, name, keep_prev=False):
+        """(0.1.43) プロファイル name (profiles/ の中のファイル名) を読んで切り替える (N キーとコンフィグメニューが使う)。
+        前のプロファイルを「直前の 1 件」として覚える (PREV。keep_prev = True なら覚え直さない = 同じものの読み直し)。"""
+        if self.inputs is None:
+            return False
+        prof = load_input_profile(name)
         if prof is None:
-            print("[Input] {} を読めなかったので、今のプロファイルのままにします".format(nxt))
-            return
+            print("[Input] {} を読めなかったので、今のプロファイルのままにします".format(name))
+            return False
         old = self.inputs
+        cur = os.path.basename(old.profile_path) if old.profile_path else None
+        old.release_panel_buttons()
         old.release_all()
         self.inputs = InputLayer(self, self.bus, profile=prof)
         self.inputs.trigger_test = old.trigger_test
-        print("[Input] プロファイルを切り替えました: {} ({})".format(prof['name'], nxt))
+        if not keep_prev and cur and cur != name:
+            self.cfgmode.prev_profile = cur
+        print("[Input] プロファイルを切り替えました: {} ({})".format(prof['name'], name))
         self._print_input_layer()
         self._make_drive_assist()          # 0.1.42: ブレーキとクルーズも新しい settings で作り直す (クルーズは切れる)
+        return True
 
     def _make_drive_assist(self):
         """(0.1.42) DriveAssist をプロファイルの settings から作る。前のものがクルーズ中なら切って、スロットルをその値から続ける。
@@ -7461,6 +8089,37 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         t._last_delta = 0.0
         t._limiter_bypassed = t.throttle_z > t.size * THROTTLE_ACCEL_LIMIT_RATIO   # リミッターの所で止めない
 
+    def _panel_and_config_frame(self, left_ctr, right_ctr):
+        """(0.1.43) 両スティックの出入りの操作、コンフィグモード、ゲームのパネルの選びを、この順に進める。"""
+        if self.inputs is None:
+            return
+        lx, ly = float(getattr(left_ctr, 'trackpadX', 0.0)), float(getattr(left_ctr, 'trackpadY', 0.0))
+        rx, ry = float(getattr(right_ctr, 'trackpadX', 0.0)), float(getattr(right_ctr, 'trackpadY', 0.0))
+        now = time.time()
+        if not self._user_applied and self.hud is not None and getattr(self.hud, 'initialized', False):
+            self._user_applied = True
+            mode = load_user_settings(None).get('hud.mode')
+            if mode:
+                print("[Config] users/vc_user.json の HUD MODE {} を使います".format(str(mode).upper()))
+                self.hud.set_mode(mode)
+        g = self.cfgmode.gesture.frame(lx, ly, rx, ry, now, allowed=not self.is_pov_mode)
+        if g == 'toggle' or (self._config_request and not self.cfgmode.active):
+            if self._config_request:
+                self.cfgmode.gesture.state = 'wait'      # トリガーで入ったときも、スティックを戻すまで選ばない
+            self._config_request = False
+            self.cfgmode.toggle()
+        self._config_request = False
+        frozen = self.cfgmode.gesture.frozen
+        self.inputs.panel_frozen = frozen
+        if self.cfgmode.active:
+            if not frozen:
+                self.cfgmode.frame(lx, ly, rx, ry, now)
+            return
+        right_ok = not self.is_pov_mode                               # 0.1.33: 十字キーモードの間、右パネルは動かない
+        if RIGHT_PANEL_BLOCKED_BY_LEFT and math.hypot(lx, ly) >= PANEL_STICK_DEADZONE:
+            right_ok = False                                          # 0.1.43: 左スティックを倒している間は右パネルを動かさない (01 の 3.4)
+        self.inputs.update_panel_selection(lx, ly, rx, ry, right_enabled=right_ok)
+
     def _drive_buttons(self, changes):
         for num, on in changes:
             try:
@@ -7484,8 +8143,17 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 value = self.inputs.values.get(hand + '.trigger_value')
                 active = True
                 args = row.get('args')
+        if getattr(self, 'cfgmode', None) is not None and self.cfgmode.active:
+            value, active, args = None, False, None   # 0.1.43: コンフィグ中はブレーキを効かせない (トリガーはメニューに使う)
         a.brake_frame(value, active, args, now)
-        msg = a.check_move(lever, self.throttle_z.throttle_grabbed)
+        to, text = a.adjust_grab(self.throttle_z.throttle_grabbed)   # 0.1.43: クルーズ中の一時調整
+        if to == 'set':
+            print("[Cruise] " + a.adjust_set(self.throttle_z.x))
+        elif to is not None:
+            self._throttle_lever_to(to)
+            if text:
+                print("[Cruise] " + text)
+        msg = a.check_move(self.throttle_z.x, self.throttle_z.throttle_grabbed)
         if msg:
             print("[Cruise] " + msg)
         for ev in a.pop_events():
@@ -8108,6 +8776,8 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             self._panel_sent = {}
             self._panel_fonts = HudFonts()
         panels = (self.inputs.panels if self.inputs is not None else None) or {}
+        if self.cfgmode.active:
+            panels = self.cfgmode.panels()                  # 0.1.43: コンフィグ中はコンフィグのパネル
         for side in ('left_game', 'right_game'):
             ps = panels.get(side)
             hide = ps is None or (side == 'right_game' and PANEL_HIDE_RIGHT_IN_POV and self.is_pov_mode)
@@ -8118,7 +8788,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 continue
             try:
                 pos = self._panel_pos(side)
-                sig = (id(ps), tuple(ps.stack), ps.selected, pos)
+                sig = (id(ps), tuple(ps.stack), ps.selected, pos, ps.root)
                 if sig == self._panel_sent.get(side):
                     continue
                 self.hud.panel_request(side, draw_panel_image(ps, self._panel_fonts), pos, PANEL_OVERLAY_WIDTH_M)
@@ -8146,23 +8816,23 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             axisY = 0.5
             axisZ = 0.5
 
-        if self.config.joystick_updates_only_when_grabbed:
+        hold_axes = self.cfgmode.active and CONFIG_HOLD_AXES           # 0.1.43: コンフィグ中は軸を入ったときの値のまま
+        if hold_axes:
+            pass
+        elif self.config.joystick_updates_only_when_grabbed:
             self._hud_axes = self._update_grabbable_joystick(axisX, axisY, axisZ)
         else:
             self._hud_axes = self._update_joystick_normal(axisX, axisY, axisZ)
 
         self._update_pad_and_pov(left_ctr, right_ctr)
-        if self.inputs is not None:                                   # 0.1.32: スティックで選ぶスロット (パネル)
-            self.inputs.update_panel_selection(
-                float(getattr(left_ctr, 'trackpadX', 0.0)), float(getattr(left_ctr, 'trackpadY', 0.0)),
-                float(getattr(right_ctr, 'trackpadX', 0.0)), float(getattr(right_ctr, 'trackpadY', 0.0)),
-                right_enabled=not self.is_pov_mode)                   # 0.1.33: 十字キーモードの間、右パネルは動かない
+        self._panel_and_config_frame(left_ctr, right_ctr)            # 0.1.32 / 0.1.43: パネルとコンフィグモード
         self._panel_draw_frame()                                      # 0.1.36: パネルを描く (変わったときだけ)
 
-        thr_y, thr_z = self._left_throttle_inputs(left_ctr)
-        self.throttle_z.update(thr_z)
-        self.throttle_y.update(thr_y)
-        self.throttle_x.update(left_ctr.yaw)
+        if not hold_axes:
+            thr_y, thr_z = self._left_throttle_inputs(left_ctr)
+            self.throttle_z.update(thr_z)
+            self.throttle_y.update(thr_y)
+            self.throttle_x.update(left_ctr.yaw)
 
         drive = self._drive_frame(self.throttle_z.x)                   # 0.1.42: RZ (と B モードの SL0 / SL1) はクルーズとブレーキを入れて書く
         self.device.set_axis(HID_USAGE_RY, self._clamp_vjoy(self.throttle_y.x * 0x8000))
@@ -8209,14 +8879,17 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                          'sig:throttle_grab': self.throttle_z.throttle_grabbed,
                          'sig:cruise': bool(self.assist.cruise_on),
                          'sig:mnvr': mnvr_on,
+                         'sig:config': self.cfgmode.active,                       # 0.1.43
+                         'sig:config_gesture': self.cfgmode.gesture.state == 'hold',
                          'sig:brake': brake_on,
                          'sig:dpad_debug': self.dpad_debug_hud,
                          'sig:trigger_zone': trg_active,
                          'sig:panel': pnl_values is not None},
                 buttons=self._vbtn_state,
                 values={'throttle': self.throttle_z.x,
-                        'cruise_power': self.assist.cruise_target() if self.assist.cruise_on else self.throttle_z.x,
+                        'cruise_power': drive['hud_throttle'] if self.assist.cruise_on else self.throttle_z.x,
                         'cruise_center': self.assist.cruise_center,
+                        'cfg': self.cfgmode.hud_text(now),
                         'dbg': self._dpad_debug_values(left_ctr, right_ctr) if self.dpad_debug_hud else None,
                         'trg': trg_values, 'pnl': pnl_values}
             )

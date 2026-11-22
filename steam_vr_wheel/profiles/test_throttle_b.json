@@ -27,7 +27,7 @@
           "4": {"label": "REST", "type": "REST"},
           "5": {"label": "CRUISE", "command": "cruise"},
           "6": {"label": "MNVR", "command": "vjoy_button", "args": {"button": 23}, "hud": "mnvr"},
-          "7": {"label": "NONE", "type": "NONE"},
+          "7": {"label": "CONFIG", "command": "config"},
           "8": {"label": "MORE", "folder": "more"}
         },
         "more": {
@@ -45,7 +45,7 @@
         "3": {"label": "SPT2", "command": "vjoy_button", "args": {"button": 25}},
         "4": {"label": "REST", "type": "REST"},
         "5": {"label": "GEAR", "exec": "trigger", "block_a": true, "command": "vjoy_button", "args": {"button": 22}},
-        "6": {"label": "TGT", "command": "vjoy_button", "args": {"button": 26}},
+        "6": {"label": "TGT", "command": "vjoy_button", "args": {"button": 26}, "latch": false},
         "7": {"label": "RADAR", "command": "vjoy_button", "args": {"button": 27}}
       }
     }

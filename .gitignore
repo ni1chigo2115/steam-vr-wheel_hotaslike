@@ -7,3 +7,5 @@ dist
 .idea/
 *.idea/
 steam_vr_wheel/media/vc_log.txt
+users/
+steam_vr_wheel/media/users/

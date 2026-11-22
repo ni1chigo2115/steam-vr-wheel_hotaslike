@@ -45,7 +45,7 @@ import time
 
 import wx
 
-VC_GUI_VERSION = '0.1.0'
+VC_GUI_VERSION = '0.1.1'
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(PACKAGE_DIR, 'media', 'vc_log.txt')
@@ -63,9 +63,9 @@ NEW_ITEM_LABEL = 'NEW'                  # [CONFIG] スロットを足したと�
 
 PANEL_SLOT_MAX = 8                      # 1 つの階層に置けるスロットの数 (_joystick.py の PANEL_SLOTS)
 PANEL_BACK_SLOT = '1'                   # 下の階層で「戻る」に予約されている番号
-ITEM_KEY_ORDER = ['label', 'type', 'folder', 'command', 'args', 'exec', 'hold', 'block_a', 'hud']
+ITEM_KEY_ORDER = ['label', 'type', 'folder', 'command', 'args', 'exec', 'hold', 'block_a', 'latch', 'hud']
 TOP_KEY_ORDER = ['format', 'format_version', 'profile', 'settings', 'input', 'panels']
-PANEL_COMMANDS = ['vjoy_button', 'brake', 'cruise']
+PANEL_COMMANDS = ['vjoy_button', 'brake', 'cruise', 'config']   # 0.1.1: 'config' = コンフィグモードへ
 CRUISE_ACTIONS = ['toggle', 'on', 'off', 'center']
 HUD_MARKS = ['mnvr', 'brake']
 VJOY_AXES = ['HID_USAGE_X', 'HID_USAGE_Y', 'HID_USAGE_Z', 'HID_USAGE_RX',
@@ -107,6 +107,9 @@ SETTING_SPECS = [
           'CRUISE の方向にスティックを 2 回倒す間隔がこの秒数以内なら、通常 / 中央クルーズの切り替え (0.1〜1.5)。', lo=0.1, hi=1.5, step=0.05),
     _spec('cruise.exit_on_move', 'クルーズ: 動かして終える', 'floatnull', None,
           'null = トリガーの二度引きだけでクルーズを終える。数値 = つかんだレバーがこれだけ動いても終える (0〜1)。', lo=0.0, hi=1.0, step=0.01),
+    _spec('cruise.adjust', 'クルーズ: つかんだとき', 'choice', 'temporary',
+          'temporary = つかんでいる間だけレバーの値 (離すと戻る)。set = 離したところを新しいクルーズの値にする。locked = 変わらない。',
+          choices=['temporary', 'set', 'locked']),
 ]
 SETTING_KEYS = [s['key'] for s in SETTING_SPECS]
 BRAKE_ARG_SPECS = [s for s in SETTING_SPECS if s['key'].startswith('brake.')]
@@ -433,7 +436,7 @@ def _check_item(where, row, is_left, out):
             out.append(('warn', where, "exec は右パネルだけの項目です (左では効きません)"))
         elif row['exec'] not in ('tilt', 'trigger'):
             out.append(('warn', where, "exec は 'tilt' か 'trigger' です ({!r})".format(row['exec'])))
-    for k in ('hold', 'block_a'):
+    for k in ('hold', 'block_a', 'latch'):
         if k in row and not isinstance(row[k], bool):
             out.append(('warn', where, '{} は true / false です ({!r})'.format(k, row[k])))
     if 'hud' in row and row['hud'] not in HUD_MARKS:
@@ -1335,12 +1338,14 @@ class PanelTab(wx.Panel):
         self.row_exec, self.ch_exec = self._mk_row(p, '実行 (exec)', lambda q: wx.Choice(q, choices=['(既定: tilt)', 'tilt', 'trigger']))
         self.row_hold, self.ch_hold = self._mk_row(p, '押しっぱなし (hold)', lambda q: wx.Choice(q, choices=['(既定)', 'true', 'false']))
         self.row_blocka, self.ch_blocka = self._mk_row(p, 'A を封じる (block_a)', lambda q: wx.Choice(q, choices=['(既定)', 'true', 'false']))
+        self.row_latch, self.ch_latch = self._mk_row(p, '選びが残る (latch)', lambda q: wx.Choice(q, choices=['(既定)', 'true', 'false']))
         self.row_hud, self.ch_hud = self._mk_row(p, 'HUD の印 (hud)', lambda q: wx.Choice(q, choices=['(なし)'] + HUD_MARKS))
-        for r in (self.row_exec, self.row_hold, self.row_blocka, self.row_hud):
+        for r in (self.row_exec, self.row_hold, self.row_blocka, self.row_latch, self.row_hud):
             v.Add(r, 0, wx.EXPAND | wx.ALL, 2)
         self.lbl_misc = _gray(wx.StaticText(
             p, label='exec = 右パネルだけ (tilt はスティックを倒す、trigger はトリガー)。hold = 操作が続く間ボタンを押し続ける。\n'
-                     'block_a = 選んでいる間、A ボタンをゲームへ出さない。hud = 押している間、その HUD の印を光らせる。'))
+                     'block_a = 選んでいる間、A ボタンをゲームへ出さない。hud = 押している間、その HUD の印を光らせる。\n'
+                     'latch = false にすると、スティックを中央に戻したとき選びが消えて、前に選んでいた項目に戻る (右の TGT など)。'))
         v.Add(self.lbl_misc, 0, wx.LEFT | wx.TOP, 6)
         p.SetSizer(v)
 
@@ -1350,7 +1355,7 @@ class PanelTab(wx.Panel):
         self.ch_cmd.Bind(wx.EVT_CHOICE, self.on_command)
         self.txt_buttons.Bind(wx.EVT_TEXT, self.on_form)
         self.ch_action.Bind(wx.EVT_CHOICE, self.on_form)
-        for c in (self.ch_exec, self.ch_hold, self.ch_blocka, self.ch_hud):
+        for c in (self.ch_exec, self.ch_hold, self.ch_blocka, self.ch_latch, self.ch_hud):
             c.Bind(wx.EVT_CHOICE, self.on_form)
         return p
 
@@ -1572,11 +1577,13 @@ class PanelTab(wx.Panel):
         self.row_exec.Show(has and not is_left)
         self.row_hold.Show(has)
         self.row_blocka.Show(has)
+        self.row_latch.Show(has)
         self.row_hud.Show(has)
         self.lbl_misc.Show(has)
         self._set_choice(self.ch_exec, item.get('exec') if has else None, ['tilt', 'trigger'], 1)
         self._set_tri(self.ch_hold, item.get('hold') if has else None)
         self._set_tri(self.ch_blocka, item.get('block_a') if has else None)
+        self._set_tri(self.ch_latch, item.get('latch') if has else None)
         self._set_choice(self.ch_hud, item.get('hud') if has else None, HUD_MARKS, 1)
         self.box_slot.Layout()
 
@@ -1673,7 +1680,7 @@ class PanelTab(wx.Panel):
                 item.pop('exec', None)
             else:
                 item['exec'] = ('tilt', 'trigger')[i - 1]
-        for key, ch in (('hold', self.ch_hold), ('block_a', self.ch_blocka)):
+        for key, ch in (('hold', self.ch_hold), ('block_a', self.ch_blocka), ('latch', self.ch_latch)):
             v = self._get_tri(ch)
             if v is None:
                 item.pop(key, None)
