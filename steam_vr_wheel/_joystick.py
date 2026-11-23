@@ -161,6 +161,17 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     (プロファイルの切り替え・読み直し・デバッグコマンド・コンソールの窓を出す / 隠す・終了)。
     VC_HIDE_CONSOLE なら、起動が済んで VC コンソールが生きている (VC_GUI_ALIVE_FILE が新しい) 間、黒いコンソールの窓を隠す。
     VC コンソールが閉じたら (印が古くなったら) コンソールの窓を出し直す (操作の手段を無くさないため)。
+  0.1.45: 実機確認 (2026-11-23) のあと。
+    (1) コンフィグのルートの 1 番 = GAME (ゲームに戻る)。下の階層の 1 番は今までどおり「戻る」。
+    (2) コンフィグのパネルの実行 = 倒しきって素早く戻す (CONFIG_EXEC = 'flick'、VRChat のアクションメニュー風) か、左トリガーの半押し。
+        倒したままでは何も起きない ('hold' = 0.1.44 までの「倒したまま 0.25 秒」)。
+    (3) コンソールのキー (ショートカット) は既定で無効 (DEBUG_KEYS_ENABLED / users/vc_user.json の 'debug.keys' / コンフィグの LOG ▸ KEYS)。
+    (4) アンチデッドゾーン: 'stick.anti_deadzone_x/y/z'、'throttle.anti_deadzone'、'stick.adz_buffer' (ゲーム側のデッドゾーンを打ち消す)。
+        コンフィグの STICK ▸ で変えられる。
+    (5) 入力の名前 left.x / left.y / right.a / right.b (ABXY。それぞれ left.a / left.menu / right.a / right.menu の別名)。
+        スティックの押し込みの区画ボタンの番号を args の "buttons" で変えられる。ボタンの番号を確かめる [BTN] のログ (LOG ▸ BTN LOG)。
+    (6) 十字キーは既定で POV だけ (十字キーモードでないときのボタン 19〜22 は出さない)。プロファイルの 'dpad.buttons' でボタンも出せる。
+    (7) VC コンソールの生存の印を 1〜2 回読めなくても、コンソールの窓を出さない (点滅の直し)。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -264,7 +275,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.44'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.45'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -765,6 +776,8 @@ HUD_POSE_THREAD_INTERVAL_SEC = 0.001       # [CONFIG] 別スレッドで計算�
 HUD_POSE_THREAD_MAX_AGE_SEC = 0.02         # [CONFIG] これより古い計算結果は使わず、その場で読む (別スレッドが止まったときの保険)
 HUD_JITTER_CSV_DIR = None                  # [CONFIG] 調査用 CSV を置くフォルダ。None = この .py と同じフォルダ。J キーで記録の開始 / 停止
 HUD_JITTER_CSV_FLUSH_SEC = 0.5             # [CONFIG] CSV をファイルに書き出す間隔 [秒] (毎回書くと HUD の描画が遅れるため、ためてまとめて書く)
+DEBUG_KEYS_ENABLED = False                 # [CONFIG] (0.1.45) コンソールのキー (下の DEBUG_KEYMAP) を使う。False = キーを押しても何もしない (誤爆を防ぐ)。
+                                           #   users/vc_user.json の 'debug.keys' (コンフィグの LOG ▸ KEYS で変える) があれば、そちらが優先
 DEBUG_KEYMAP = [                           # [CONFIG] コンソールのキー → デバッグコマンド (Joystick.debug_command の名前)。
     ('n', 'input_profile_next'),           #   (0.1.25) 入力の仮想化: 次のプロファイルに切り替える
     ('r', 'trigger_test'),                 #   (0.1.23) 入力の仮想化: トリガーの半押し・引き切りの確かめ ([TRG] のログ)
@@ -1449,7 +1462,13 @@ class VcLink(object):
             self._read_commands()
         if now - self._t_alive >= 1.0:
             self._t_alive = now
-            self._alive = vc_gui_alive(now)
+            if vc_gui_alive(now):
+                self._alive_miss = 0
+                self._alive = True
+            else:
+                self._alive_miss = getattr(self, '_alive_miss', 0) + 1
+                if self._alive_miss >= 3:               # 0.1.45: 書きかけを読んだだけで窓を出さない (3 回続けていなければ、いない)
+                    self._alive = False
             self._console_frame()
         self._write_status(now)
 
@@ -6159,12 +6178,12 @@ def load_input_profile(path):
         bindings = default_input_bindings(settings.get('input.trigger_button_from'))
     for i, row in enumerate(inp.get('bindings') or []):
         try:
-            bindings.append((str(row['input']), str(row['command']), dict(row.get('args') or {})))
+            bindings.append((input_alias(str(row['input'])), str(row['command']), dict(row.get('args') or {})))
         except Exception as e:
             print("[Input] Warning: {} の input.bindings の {} 行目を読めません: {}".format(os.path.basename(path), i + 1, e))
     unbind = inp.get('unbind') or []                     # 0.1.38
     if unbind:
-        drop = set(str(n) for n in unbind)
+        drop = set(input_alias(str(n)) for n in unbind)
         before = len(bindings)
         bindings = [b for b in bindings if b[0] not in drop]
         print("[Input] {}: input.unbind で {} 行の割り当てを外しました ({})".format(
@@ -6256,6 +6275,21 @@ def save_user_setting(key, value, profile_path=None, remove=False):
     else:
         s[key] = value
     return path if _write_user_json(path, s) else None
+
+
+DPAD_BUTTONS = None                        # [CONFIG] (0.1.45) None = 十字キーは POV だけ。[上, 下, 左, 右] = 十字キーモードでないとき
+                                           #   (右パネルが無いとき) 右スティックの向きでこのボタンを押す (0.1.44 までは [19, 20, 21, 22])。
+                                           #   プロファイルの 'dpad.buttons' が優先
+INPUT_ALIASES = {                          # [CONFIG] (0.1.45) プロファイルに書ける別名 → 中の名前。ABXY は Touch 系のコントローラーの並び
+    'left.x': 'left.a',                    #   (A・X = SteamVR の A ボタン、B・Y = アプリのメニューのボタン)。ほかのコントローラーでは
+    'left.y': 'left.menu',                 #   違うかもしれないので、コンフィグの LOG ▸ BTN LOG の [BTN] の行で確かめる
+    'right.b': 'right.menu',
+}
+
+
+def input_alias(name):
+    """(0.1.45) 入力の別名を中の名前にする (知らない名前はそのまま)。"""
+    return INPUT_ALIASES.get(name, name)
 
 
 def list_input_profiles():
@@ -6691,6 +6725,8 @@ class InputLayer(object):
             return False
         known = set(n for _, n in RAW_BUTTON_NAMES)
         known.update(['trigger_touch', 'trigger_value', 'trigger_half', 'trigger_full', 'stick_dir', 'pov_mode'])
+        if name in INPUT_ALIASES:
+            return True                                  # 0.1.45: ABXY の別名
         return rest in known or (rest.startswith('b') and rest[1:].isdigit())
 
     def release_panel_buttons(self):
@@ -6716,6 +6752,11 @@ class InputLayer(object):
         return '{}.{}'.format(hand, self._button_names.get(button, 'b{}'.format(button)))
 
     def button_event(self, hand, button, pressed):
+        if getattr(self.owner, '_button_log', False):        # 0.1.45: ボタンの番号を確かめる
+            name = self.button_name(hand, button)
+            alias = [k for k, v in INPUT_ALIASES.items() if v == name]
+            print("[BTN] {} SteamVR のボタン {} = {}{} {}".format(hand, button, name,
+                  ' (' + ', '.join(alias) + ')' if alias else '', '押す' if pressed else '離す'))
         self.set(self.button_name(hand, button), bool(pressed))
 
     def frame(self, left_ctr, right_ctr):
@@ -7068,11 +7109,19 @@ class InputLayer(object):
     def _cmd_vjoy_zone_button(self, name, value, args):
         hand = args['hand']
         src = 'in:' + name
+        nums = args.get('buttons')                       # 0.1.45: 区画ごとの番号を変える。5 つの番号を、既定の並び (左 4〜8 / 右 12〜16) と同じ順に書く
+        if not (isinstance(nums, list) and len(nums) == len(_ZONE_BUTTONS[hand])):
+            if nums is not None and not getattr(self, '_zone_warned', False):
+                self._zone_warned = True
+                print("[Input] Warning: {} の buttons は {} 個の番号で書いてください。既定の番号を使います".format(name, len(_ZONE_BUTTONS[hand])))
+            nums = _ZONE_BUTTONS[hand]
         if value:
-            self.bus.set_button(self.owner.get_trackpad_zone(right=(hand == 'right')), True, src)
+            zone = self.owner.get_trackpad_zone(right=(hand == 'right'))
+            idx = _ZONE_BUTTONS[hand].index(zone) if zone in _ZONE_BUTTONS[hand] else 0
+            self.bus.set_button(int(nums[idx]), True, src)
         else:
-            for b_id in _ZONE_BUTTONS[hand]:
-                self.bus.set_button(b_id, False, src)
+            for b_id in nums:
+                self.bus.set_button(int(b_id), False, src)
 
     def _cmd_vjoy_axis(self, name, value, args):
         self.bus.set_axis(globals()[args['axis']], int(value * 0x8000))
@@ -7084,7 +7133,10 @@ class InputLayer(object):
         direction = self.values['right.stick_dir']
         if not pov and 'right_game' in (self.panels or {}):
             direction = 5     # 0.1.34: 右パネルがある間、十字キーモードでないときのボタンは出さない (パネルの項目が代わり)
-        self.owner._dpad_output(pov, direction, 'in:right.stick_dir', args.get('buttons'), args.get('pov', 1))
+        btns = self.settings.get('dpad.buttons', DPAD_BUTTONS)  # 0.1.45: 既定は POV だけ (ボタンは出さない)
+        if not (isinstance(btns, list) and len(btns) == 4):
+            btns = []
+        self.owner._dpad_output(pov, direction, 'in:right.stick_dir', btns, args.get('pov', 1))
 
     def status_lines(self):
         on = sorted(k for k, v in self.values.items() if v is True)
@@ -7153,6 +7205,39 @@ BRAKE_BUTTON_ON = 0.5                      # [CONFIG] (0.1.42) 'button' のと�
 CRUISE_DOUBLE_CLICK_SEC = 0.40             # [CONFIG] (0.1.42) トリガーの 2 回の半押しの間がこれ以内ならダブルクリック [秒]。'cruise.double_click_sec'
 CRUISE_DOUBLE_TILT_SEC = 0.60              # [CONFIG] (0.1.42) スティックの 2 回の倒しの間がこれ以内なら、標準 / センターを切り替える [秒]。'cruise.double_tilt_sec'
 CRUISE_EXIT_ON_MOVE = None                 # [CONFIG] (0.1.42) None = ダブルクリックだけで切れる。数値 (0〜1) = つかんだスロットルをこれ以上動かしたら切れる。'cruise.exit_on_move'
+# (0.1.45) アンチデッドゾーン: ゲーム側に変えられないデッドゾーン (AC7・AC8 は約 20%) があるとき、出力を 0 から始めずこの値から始めて打ち消す。
+#   0.20 ≒ Steam のコントローラー設定のアンチデッドゾーン 6500 (32767 を 100% とした値)。中央のある軸は左右 (前後) それぞれに、
+#   スロットルは 0 からの片側にかける。軸ごとに別々 (Steam の「四角」と同じ考え方)。0 = かけない (0.1.44 までと同じ)。
+#   STICK_ADZ_BUFFER より小さい入力は 0 のまま (手のぶれでふらつかないように)。アンチデッドゾーンが 0 の軸には、この幅もかけない。
+STICK_ANTI_DEADZONE_X = 0.0                # [CONFIG] (0.1.45) 操縦桿の左右 (ロール、vJoy X)。'stick.anti_deadzone_x'
+STICK_ANTI_DEADZONE_Y = 0.0                # [CONFIG] (0.1.45) 操縦桿の前後 (ピッチ、vJoy Y)。'stick.anti_deadzone_y'
+STICK_ANTI_DEADZONE_Z = 0.0                # [CONFIG] (0.1.45) 操縦桿のひねり (ヨー、vJoy Z)。'stick.anti_deadzone_z'
+THROTTLE_ANTI_DEADZONE = 0.0               # [CONFIG] (0.1.45) スロットル (vJoy RZ、B モードのアクセル SL0)。'throttle.anti_deadzone'
+STICK_ADZ_BUFFER = 0.02                    # [CONFIG] (0.1.45) これより小さい入力は 0 のまま (0〜0.2)。'stick.adz_buffer'
+
+
+def anti_deadzone_centered(v, adz, buf):
+    """(0.1.45) 中央 0.5 の軸 (0〜1) にアンチデッドゾーンをかける。"""
+    if adz <= 0.0:
+        return v
+    d = (float(v) - 0.5) * 2.0
+    a = abs(d)
+    if a <= buf:
+        return 0.5
+    a = adz + (1.0 - adz) * min(1.0, (a - buf) / max(1e-6, 1.0 - buf))
+    return 0.5 + (a if d > 0 else -a) / 2.0
+
+
+def anti_deadzone_one_sided(v, adz, buf):
+    """(0.1.45) 0 から 1 の軸 (スロットル) にアンチデッドゾーンをかける。"""
+    if adz <= 0.0:
+        return v
+    v = float(v)
+    if v <= buf:
+        return 0.0
+    return adz + (1.0 - adz) * min(1.0, (v - buf) / max(1e-6, 1.0 - buf))
+
+
 CRUISE_ADJUST = 'temporary'                # [CONFIG] (0.1.43) クルーズ中にスロットルをつかんで動かしたとき: 'temporary' = つかんでいる間だけレバーの値
                                            #   (離すとクルーズの値に戻る) / 'set' = 離したところを新しいクルーズの値にする / 'locked' = 動かしても変わらない。'cruise.adjust'
 THROTTLE_MODES = ('A', 'B')
@@ -7176,6 +7261,11 @@ DRIVE_ASSIST_SETTINGS = [   # (settings の名前, [CONFIG] の変数名, 種類
     ('cruise.double_tilt_sec', 'CRUISE_DOUBLE_TILT_SEC', 'float', 0.1, 1.5, None),
     ('cruise.exit_on_move', 'CRUISE_EXIT_ON_MOVE', 'float_or_none', 0.0, 1.0, None),
     ('cruise.adjust', 'CRUISE_ADJUST', 'choice', None, None, CRUISE_ADJUSTS),
+    ('stick.anti_deadzone_x', 'STICK_ANTI_DEADZONE_X', 'float', 0.0, 0.5, None),     # 0.1.45
+    ('stick.anti_deadzone_y', 'STICK_ANTI_DEADZONE_Y', 'float', 0.0, 0.5, None),
+    ('stick.anti_deadzone_z', 'STICK_ANTI_DEADZONE_Z', 'float', 0.0, 0.5, None),
+    ('throttle.anti_deadzone', 'THROTTLE_ANTI_DEADZONE', 'float', 0.0, 0.5, None),
+    ('stick.adz_buffer', 'STICK_ADZ_BUFFER', 'float', 0.0, 0.2, None),
 ]
 
 
@@ -7503,7 +7593,12 @@ class DriveAssist(object):
 CONFIG_GESTURE_SEC = 1.5                   # [CONFIG] (0.1.43) 両スティックを上に保つ時間 [秒] (01 の 3.4 は 1〜2 秒)
 CONFIG_GESTURE_ANGLE_DEG = 30.0            # [CONFIG] (0.1.43) 真上からこの角度以内なら「上」
 CONFIG_GESTURE_MIN = 0.70                  # [CONFIG] (0.1.43) 「上」とみなす倒し量 (R2 の確かめの道具と同じ 0.7)
-CONFIG_TILT_CONFIRM_SEC = 0.25             # [CONFIG] (0.1.43) コンフィグのパネルで、倒しただけで動く項目の待ち [秒]
+CONFIG_TILT_CONFIRM_SEC = 0.25             # [CONFIG] (0.1.43) CONFIG_EXEC = 'hold' のとき、倒しただけで動く項目の待ち [秒]
+CONFIG_EXEC = 'flick'                      # [CONFIG] (0.1.45) コンフィグのパネルの実行: 'flick' = 倒しきって素早く中央に戻したとき (VRChat の
+                                           #   アクションメニュー風。倒したままでは何も起きない) / 'hold' = 倒したまま CONFIG_TILT_CONFIRM_SEC (0.1.44 まで)。
+                                           #   どちらでも、左トリガーの半押しで左の選んでいる項目を実行できる
+CONFIG_FLICK_MIN = 0.85                    # [CONFIG] (0.1.45) 'flick': 倒しきったとみなす倒し量
+CONFIG_FLICK_RETURN_SEC = 0.25             # [CONFIG] (0.1.45) 'flick': 倒しきった所から中央 (PANEL_STICK_RELEASE 未満) までをこの時間以内に戻したら実行
 CONFIG_HOLD_AXES = True                    # [CONFIG] (0.1.43) コンフィグ中、操縦桿とスロットルの軸を入ったときの値のままにする (False = 動かせる)
 RIGHT_PANEL_BLOCKED_BY_LEFT = True         # [CONFIG] (0.1.43) 左スティックを倒している間は右パネルを動かさない (01 の 3.4。出入りの操作と右パネルの 1 番がぶつからないように)
 
@@ -7572,23 +7667,35 @@ CONFIG_CHOICES = {
     'throttle.mode': list(THROTTLE_MODES),
     'brake.method': list(BRAKE_METHODS),
     'cruise.adjust': list(CRUISE_ADJUSTS),
+    'debug.keys': [False, True],
 }
 CONFIG_NUMBERS = {   # 名前: (小さい刻み, 大きい刻み, 下限, 上限, 見せ方)
+    'stick.anti_deadzone_x': (0.01, 0.05, 0.0, 0.5, 'pct'),
+    'stick.anti_deadzone_y': (0.01, 0.05, 0.0, 0.5, 'pct'),
+    'stick.anti_deadzone_z': (0.01, 0.05, 0.0, 0.5, 'pct'),
+    'throttle.anti_deadzone': (0.01, 0.05, 0.0, 0.5, 'pct'),
+    'stick.adz_buffer': (0.005, 0.02, 0.0, 0.2, 'pct1'),
     'brake.max': (0.05, 0.20, 0.0, 1.0, 'pct'),
     'brake.curve': (0.1, 0.5, 0.2, 5.0, 'num'),
     'brake.smooth_sec': (0.02, 0.10, 0.0, 1.0, 'sec'),
 }
 CONFIG_LABELS = {'hud.mode': 'HUD MODE', 'throttle.mode': 'THR MODE', 'brake.method': 'BRAKE TYPE', 'brake.max': 'BRAKE MAX',
-                 'brake.curve': 'BRAKE CURVE', 'brake.smooth_sec': 'BRAKE SMOOTH', 'cruise.adjust': 'CRUISE ADJ'}
+                 'brake.curve': 'BRAKE CURVE', 'brake.smooth_sec': 'BRAKE SMOOTH', 'cruise.adjust': 'CRUISE ADJ',
+                 'stick.anti_deadzone_x': 'ADZ ROLL', 'stick.anti_deadzone_y': 'ADZ PITCH', 'stick.anti_deadzone_z': 'ADZ YAW',
+                 'throttle.anti_deadzone': 'ADZ THR', 'stick.adz_buffer': 'ADZ BUFFER', 'debug.keys': 'KEYS'}
 
 
 def config_value_text(key, v):
     if v is None:
         return '-'
+    if isinstance(v, bool):
+        return 'ON' if v else 'OFF'
     spec = CONFIG_NUMBERS.get(key)
     if spec:
         if spec[4] == 'pct':
             return '{:.0f}%'.format(float(v) * 100)
+        if spec[4] == 'pct1':
+            return '{:.1f}%'.format(float(v) * 100)
         if spec[4] == 'sec':
             return '{:.2f}S'.format(float(v))
         return '{:.1f}'.format(float(v))
@@ -7599,13 +7706,21 @@ def config_menu_folders(profiles, has_prev):
     """(0.1.43) コンフィグメニューの中身 (プログラムが持つ。プロファイルの JSON には書かない)。"""
     f = {
         'config': {
+            '1': {'label': 'GAME', 'act': 'exit'},      # 0.1.45: ルートの 1 = ゲームに戻る (ユーザーの指示 2026-11-23)
             '2': {'label': 'HUD MODE', 'cfg': 'hud.mode'},
             '3': {'label': 'PROFILE', 'folder': 'profile'},
             '4': {'label': 'THROTTLE', 'folder': 'throttle'},
             '5': {'label': 'POSITION', 'folder': 'position'},
             '6': {'label': 'LOG', 'folder': 'log'},
-            '7': {'label': 'GAME', 'act': 'exit'},
+            '7': {'label': 'STICK', 'folder': 'stick'},
             '8': {'label': 'DEBUG', 'folder': 'debug'},
+        },
+        'stick': {                                      # 0.1.45: アンチデッドゾーン
+            '2': {'label': 'ADZ ROLL', 'cfg': 'stick.anti_deadzone_x'},
+            '3': {'label': 'ADZ PITCH', 'cfg': 'stick.anti_deadzone_y'},
+            '4': {'label': 'ADZ YAW', 'cfg': 'stick.anti_deadzone_z'},
+            '5': {'label': 'ADZ THR', 'cfg': 'throttle.anti_deadzone'},
+            '6': {'label': 'ADZ BUFFER', 'cfg': 'stick.adz_buffer'},
         },
         'throttle': {
             '2': {'label': 'THR MODE', 'cfg': 'throttle.mode'},
@@ -7625,6 +7740,8 @@ def config_menu_folders(profiles, has_prev):
             '2': {'label': 'LOG SIZE', 'act': 'cmd', 'cmd': 'hud_log_cycle'},
             '3': {'label': 'LOG CLEAR', 'act': 'cmd', 'cmd': 'hud_log_clear'},
             '4': {'label': 'VERSION', 'act': 'cmd', 'cmd': 'version'},
+            '5': {'label': 'KEYS', 'cfg': 'debug.keys'},          # 0.1.45
+            '6': {'label': 'BTN LOG', 'act': 'cmd', 'cmd': 'button_log'},
         },
         'debug': {
             '2': {'label': 'STATS', 'act': 'cmd', 'cmd': 'hud_stats'},
@@ -7751,10 +7868,12 @@ class ConfigMode(object):
         items = {}
         if key in CONFIG_CHOICES:
             for i, c in enumerate(CONFIG_CHOICES[key][:8]):
-                items[str(i + 1)] = {'label': str(c).upper(), 'set': c}
+                items[str(i + 1)] = {'label': config_value_text(key, c), 'set': c}
         else:
             small, big = CONFIG_NUMBERS[key][0], CONFIG_NUMBERS[key][1]
-            fmt = (lambda d: '{:+.0f}%'.format(d * 100)) if CONFIG_NUMBERS[key][4] == 'pct' else (lambda d: '{:+.2f}'.format(d))
+            kind = CONFIG_NUMBERS[key][4]
+            fmt = ((lambda d: '{:+.0f}%'.format(d * 100)) if kind == 'pct' else
+                   (lambda d: '{:+.1f}%'.format(d * 100)) if kind == 'pct1' else (lambda d: '{:+.2f}'.format(d)))
             items = {'1': {'label': fmt(small), 'step': small}, '2': {'label': fmt(-small), 'step': -small},
                      '3': {'label': fmt(big), 'step': big}, '4': {'label': fmt(-big), 'step': -big},
                      '5': {'label': 'DEFAULT', 'reset': True}, '6': {'label': 'UNDO', 'undo': True}}
@@ -7768,6 +7887,8 @@ class ConfigMode(object):
         js = self.owner
         if key == 'hud.mode':
             return getattr(js.hud, 'mode', None) if js.hud is not None else None
+        if key == 'debug.keys':
+            return js.debug_keys_on()
         a = js.assist
         return a.cfg.get(key) if a is not None else None
 
@@ -7775,6 +7896,8 @@ class ConfigMode(object):
         js = self.owner
         if key == 'hud.mode':
             return HUD_DEPTH_MODE
+        if key == 'debug.keys':
+            return DEBUG_KEYS_ENABLED
         base = js.inputs.settings_base if js.inputs is not None else {}
         for k, cname, kind, lo, hi, choices in DRIVE_ASSIST_SETTINGS:
             if k == key:
@@ -7789,6 +7912,10 @@ class ConfigMode(object):
                 print("[Config] HUD MODE を {} にできません".format(config_value_text(key, v)))
                 return
             path = save_user_setting(key, v, None, remove=reset)
+        elif key == 'debug.keys':
+            js._debug_keys = bool(v)
+            js._keys_off_said = False
+            path = save_user_setting(key, bool(v), None, remove=reset)
         else:
             prof = js.inputs.profile_path if js.inputs is not None else None
             path = save_user_setting(key, v, prof, remove=reset) if prof else None
@@ -7852,6 +7979,25 @@ class ConfigMode(object):
                     js.inputs.config_mode = True
                 self._build_left(keep=True)
 
+    def reset_tilt(self):
+        """(0.1.45) 出入りの操作の間は、倒しの記録を捨てる (戻した動きを「素早く戻した」と取り違えないように)。"""
+        self._tilt = {}
+
+    def _exec_slot(self, hand, ps, slot):
+        """(0.1.45) スティックの操作でスロットを実行する。左 = フォルダ・戻る・項目 (トリガーと同じ)、右 = 値を変える。"""
+        if ps.selected != slot:
+            ps.select(slot)
+        if hand == 'left':
+            if ps.slot_kind(slot) in ('folder', 'back'):
+                self._move(ps)
+            elif CONFIG_EXEC == 'flick':
+                self._run_left()
+            return
+        row = ps.table().get(slot)
+        key = self._left_row().get('cfg') if self._left_row() else None
+        if row is not None and key is not None:
+            self._apply_right(row, key)
+
     def _move(self, ps):
         kind, what = ps.execute()
         if kind == 'enter':
@@ -7866,39 +8012,38 @@ class ConfigMode(object):
         inp = js.inputs
         if inp is None or self.left is None:
             return
-        # 左: 選ぶ。フォルダと戻るは倒したまま待つと動く
+        # 左右: 倒して選ぶ。CONFIG_EXEC = 'flick' なら倒しきって素早く戻したとき、'hold' なら倒したまま待ったときに実行
         for hand, ps, x, y in (('left', self.left, lx, ly), ('right', self.right, rx, ry)):
-            t = self._tilt.get(hand)
+            t = self._tilt.get(hand)        # [スロット, 倒した時刻, 実行したか, 最後に倒しきっていた時刻]
             if ps is None:
                 self._tilt[hand] = None
                 continue
             dz = PANEL_STICK_RELEASE if t else PANEL_STICK_DEADZONE
             slot = panel_slot_from_stick(x, y, 8, dz)
             if slot is None:
+                if (t is not None and CONFIG_EXEC == 'flick' and not t[2] and t[3] is not None
+                        and now - t[3] <= CONFIG_FLICK_RETURN_SEC):
+                    self._exec_slot(hand, ps, t[0])     # 倒しきって素早く戻した
                 self._tilt[hand] = None
                 if hand == 'right' and ps.selected is not None:
                     ps.selected = None                  # 補助は戻すと消える
                 continue
             if not ps.selectable(slot):
                 continue
+            full = math.hypot(x, y) >= CONFIG_FLICK_MIN
             if t is None or t[0] != slot:
-                self._tilt[hand] = [slot, now, False]
+                self._tilt[hand] = [slot, now, False, now if full else None]
                 if ps.selected != slot:
                     ps.select(slot)
                     if hand == 'left':
                         self._sync_right()
                 continue
-            if t[2] or now - t[1] < CONFIG_TILT_CONFIRM_SEC:
+            if full:
+                t[3] = now
+            if CONFIG_EXEC != 'hold' or t[2] or now - t[1] < CONFIG_TILT_CONFIRM_SEC:
                 continue
             t[2] = True
-            if hand == 'left':
-                if ps.slot_kind(slot) in ('folder', 'back'):
-                    self._move(ps)
-            else:
-                row = ps.table().get(slot)
-                key = self._left_row().get('cfg') if self._left_row() else None
-                if row is not None and key is not None:
-                    self._apply_right(row, key)
+            self._exec_slot(hand, ps, slot)
         # 左トリガーの半押し = 左の項目を実行
         for hand in ('left', 'right'):
             on = bool(inp.values.get(hand + '.trigger_half'))
@@ -8292,6 +8437,8 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         if self.cfgmode.active:
             if not frozen:
                 self.cfgmode.frame(lx, ly, rx, ry, now)
+            else:
+                self.cfgmode.reset_tilt()                 # 0.1.45
             return
         right_ok = not self.is_pov_mode                               # 0.1.33: 十字キーモードの間、右パネルは動かない
         if RIGHT_PANEL_BLOCKED_BY_LEFT and math.hypot(lx, ly) >= PANEL_STICK_DEADZONE:
@@ -8340,6 +8487,11 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         self.throttle_z.cruise_active = a.cruise_on
         self.cruise_center = a.cruise_center
         out = a.throttle_outputs(self.throttle_z.x)
+        tadz, tbuf = a.cfg['throttle.anti_deadzone'], a.cfg['stick.adz_buffer']
+        if tadz > 0.0:                                  # 0.1.45: スロットルのアンチデッドゾーン (RZ と B モードのアクセル)
+            out['rz'] = anti_deadzone_one_sided(out['rz'], tadz, tbuf)
+            if out['sl0'] is not None:
+                out['sl0'] = anti_deadzone_one_sided(out['sl0'], tadz, tbuf)
         self.device.set_axis(HID_USAGE_RZ, self._clamp_vjoy(out['rz'] * 0x8000))
         if out['sl0'] is not None:
             self.device.set_axis(HID_USAGE_SL0, self._clamp_vjoy(out['sl0'] * 0x8000))
@@ -8507,7 +8659,19 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         if hand == 'right' and button == openvr.k_EButton_Grip and (not self.config.joystick_grabbing_switch):
             self.joystick_grabbed = False
 
+    def _adz_axes(self, x, y, z):
+        """(0.1.45) 操縦桿の 3 軸にアンチデッドゾーンをかける (DriveAssist の設定。無ければそのまま)。"""
+        a = getattr(self, 'assist', None)
+        if a is None:
+            return x, y, z
+        c = a.cfg
+        buf = c['stick.adz_buffer']
+        return (anti_deadzone_centered(x, c['stick.anti_deadzone_x'], buf),
+                anti_deadzone_centered(y, c['stick.anti_deadzone_y'], buf),
+                anti_deadzone_centered(z, c['stick.anti_deadzone_z'], buf))
+
     def _update_joystick_normal(self, axisX, axisY, axisZ):
+        axisX, axisY, axisZ = self._adz_axes(axisX, axisY, axisZ)   # 0.1.45
         vx = self._clamp_vjoy(axisX * 0x8000)
         vy = self._clamp_vjoy(axisY * 0x8000)
         vz = self._clamp_vjoy(axisZ * 0x8000)
@@ -8521,10 +8685,11 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         self.grabbable_y.update(axisY)
         self.grabbable_z.update(axisZ)
 
-        self.device.set_axis(HID_USAGE_X, self._clamp_vjoy(self.grabbable_x.x * 0x8000))
-        self.device.set_axis(HID_USAGE_Y, self._clamp_vjoy(self.grabbable_y.x * 0x8000))
-        self.device.set_axis(HID_USAGE_Z, self._clamp_vjoy(self.grabbable_z.x * 0x8000))
-        return self.grabbable_x.x, self.grabbable_y.x, self.grabbable_z.x
+        ox, oy, oz = self._adz_axes(self.grabbable_x.x, self.grabbable_y.x, self.grabbable_z.x)   # 0.1.45
+        self.device.set_axis(HID_USAGE_X, self._clamp_vjoy(ox * 0x8000))
+        self.device.set_axis(HID_USAGE_Y, self._clamp_vjoy(oy * 0x8000))
+        self.device.set_axis(HID_USAGE_Z, self._clamp_vjoy(oz * 0x8000))
+        return ox, oy, oz
 
     def _out_button(self, b_id, value, source):
         """経路 source の名前を付けて vJoy のボタンを出す (バスが無いときは 0.1.18 までと同じ直接書き込み)。"""
@@ -8566,6 +8731,13 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         self._dpad_output(is_pov_mode, direction, 'dpad')
 
     def _dpad_output(self, is_pov_mode, direction, source, pov_buttons=None, pov_id=1):
+        if pov_buttons is not None and len(pov_buttons) == 0:   # 0.1.45: ボタンを出さない設定 (POV だけ)
+            angle = {8: 0, 9: 4500, 6: 9000, 3: 13500, 2: 18000, 1: 22500, 4: 27000, 7: 31500}.get(direction, -1)
+            if direction == 5 or not is_pov_mode:
+                angle = -1
+            self._dpad_dbg_out = str(angle) if angle >= 0 else '-'
+            self._set_pov(angle, pov_id)
+            return
         """十字キーを vJoy に出す (0.1.21 までの _update_pad_and_pov の後半そのまま)。
         direction はテンキーの並び (5 = 中立)。POV モードなら POV pov_id に角度、違えば pov_buttons (上 下 左 右) を押す。
         0.1.22 から InputLayer の命令 'vjoy_dpad' が呼ぶ (InputLayer が無いときは毎フレーム 'dpad' 経路で呼ぶ)。"""
@@ -8675,6 +8847,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ('trigger_test', "入力の仮想化: トリガーの確かめ用の仮の割り当てを なし → 引き切りだけ → 半押しと引き切り の順に (ゲームへは出さない。[TRG] のログ)"),
         ('bus_status', "入力の仮想化: 出力のバス (InputBus) と InputLayer の今の状態を 1 回表示する (押下中のボタンと経路、軸、POV、書き込み回数、押している入力)"),
         ('drive_status', "(0.1.42) ブレーキとクルーズとスロットルの出し方 (DriveAssist) の今の設定と状態を 1 回表示する"),
+        ('button_log', "(0.1.45) コントローラーのボタンを押すたびに [BTN] の行 (SteamVR の番号と入力の名前) を出す / やめる"),
         ('dpad_debug', "Q29-3 調査用: スティックと VirtualDPad の数値の段を出す / 隠す"),
         ('dpad_log', "Q29-3 調査用: VirtualDPad の方向が変わるたびの [DPAD] の1行ログを出す / 止める"),
         ('hud_late_shift_toggle', "HUD 揺れ調査用: 'fakefar' のずらし (HUD_LATE_SHIFT) を入 / 切"),
@@ -8777,6 +8950,9 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             else:
                 for line in self.inputs.status_lines():
                     print(line)
+        elif name == 'button_log':
+            self._button_log = not getattr(self, '_button_log', False)
+            print("[Debug] ボタンのログ ([BTN]): {}".format('オン (押すと番号と名前を出す)' if self._button_log else 'オフ'))
         elif name == 'version':
             print(app_version_text())
             if hud is not None and hasattr(hud, 'show_splash'):
@@ -8811,17 +8987,29 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             pass
         os._exit(0)
 
+    def debug_keys_on(self):
+        """(0.1.45) コンソールのキーを使うか (users/vc_user.json の 'debug.keys'、無ければ DEBUG_KEYS_ENABLED)。"""
+        v = getattr(self, '_debug_keys', None)
+        if v is None:
+            v = load_user_settings(None).get('debug.keys', DEBUG_KEYS_ENABLED)
+            self._debug_keys = bool(v)
+        return self._debug_keys
+
     def _poll_calibration_key(self):
         """コンソールのキーを DEBUG_KEYMAP でデバッグコマンドに変えて実行する (Windows のみ)。"""
         if msvcrt is None:
             return
         try:
             keymap = dict((str(k).lower(), c) for k, c in DEBUG_KEYMAP)
+            on = self.debug_keys_on()
             while msvcrt.kbhit():
                 ch = msvcrt.getwch()
                 cmd = keymap.get(ch.lower())
-                if cmd:
+                if cmd and on:
                     self.debug_command(cmd)
+                elif cmd and not getattr(self, '_keys_off_said', False):
+                    self._keys_off_said = True      # 0.1.45: 1 回だけ知らせる
+                    print("[Debug] コンソールのキーは無効です (コンフィグの LOG ▸ KEYS か DEBUG_KEYS_ENABLED でオン)")
         except Exception as e:
             print("[Debug] キー入力の処理に失敗: {}: {}".format(type(e).__name__, e))
 

@@ -59,7 +59,7 @@ import time
 
 import wx
 
-VC_GUI_VERSION = '0.1.2'
+VC_GUI_VERSION = '0.1.3'
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(PACKAGE_DIR, 'media', 'vc_log.txt')
@@ -96,6 +96,10 @@ DEBUG_COMMANDS = [('hud_recenter', 'HUD を基準に合わせ直す'), ('version
 GRAY = (110, 110, 110)
 RED = (190, 30, 30)
 ORANGE = (170, 100, 0)
+LOG_BG = (0, 0, 0)                      # [CONFIG] ログの背景 (黒)
+LOG_FG = (224, 224, 224)                # [CONFIG] ログの文字
+LOG_WARN = (255, 220, 60)               # [CONFIG] 警告の行 (黄)
+LOG_ERR = (255, 120, 120)               # [CONFIG] エラーの行 (薄い赤)
 BLUE = (30, 80, 170)
 GREEN = (30, 130, 60)
 
@@ -133,11 +137,18 @@ def send_cockpit_cmd(path, obj):
 
 def write_alive(path):
     """生存の印 (今の時刻) を上書きする。失敗しても落とさず、成功かどうかだけ返す。"""
+    tmp = path + '.tmp'
     try:
-        with open(path, 'w') as f:
+        with open(tmp, 'w') as f:        # 途中まで書いた空のファイルを読まれないよう、別名に書いてから差し替える
             f.write(str(time.time()))
+        os.replace(tmp, path)
         return True
     except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
         return False
 
 
@@ -201,6 +212,24 @@ SETTING_SPECS = [
     _spec('cruise.adjust', 'クルーズ: つかんだとき', 'choice', 'temporary',
           'temporary = つかんでいる間だけレバーの値 (離すと戻る)。set = 離したところを新しいクルーズの値にする。locked = 変わらない。',
           choices=['temporary', 'set', 'locked']),
+    _spec('stick.anti_deadzone_x', 'アンチデッドゾーン: 左右 (ロール)', 'float', 0.0,
+          '操縦桿の左右 (ロール)。0 から動き始めた瞬間に、出力をこの値から始める (ゲーム側のデッドゾーンを打ち消す。0.20 ≒ Steam の 6500)。',
+          lo=0.0, hi=0.5, step=0.01),
+    _spec('stick.anti_deadzone_y', 'アンチデッドゾーン: 前後 (ピッチ)', 'float', 0.0,
+          '操縦桿の前後 (ピッチ)。0 から動き始めた瞬間に、出力をこの値から始める (0.20 ≒ Steam の 6500)。',
+          lo=0.0, hi=0.5, step=0.01),
+    _spec('stick.anti_deadzone_z', 'アンチデッドゾーン: ひねり (ヨー)', 'float', 0.0,
+          '操縦桿のひねり (ヨー)。0 から動き始めた瞬間に、出力をこの値から始める (0.20 ≒ Steam の 6500)。',
+          lo=0.0, hi=0.5, step=0.01),
+    _spec('throttle.anti_deadzone', 'アンチデッドゾーン: スロットル', 'float', 0.0,
+          'スロットル。0 から動き始めた瞬間に、出力をこの値から始める (0.20 ≒ Steam の 6500)。',
+          lo=0.0, hi=0.5, step=0.01),
+    _spec('stick.adz_buffer', 'アンチデッドゾーンの無視幅', 'float', 0.02,
+          'これより小さい入力は 0 のまま (手のぶれでふらつかないように)。', lo=0.0, hi=0.2, step=0.005),
+    _spec('dpad.buttons', '十字キーのボタン', 'intlist4_or_null', None,
+          'null = 十字キーは POV だけ。[上, 下, 左, 右] のボタン番号 (1〜128) をカンマで 4 つ書くと、ボタンでも出す。空欄 = null。'),
+    _spec('debug.keys', 'コンソールのキー', 'bool', False,
+          'コンソールのキー (ショートカット) を使う。false = キーを押しても何もしない (誤爆を防ぐ)。'),
 ]
 SETTING_KEYS = [s['key'] for s in SETTING_SPECS]
 BRAKE_ARG_SPECS = [s for s in SETTING_SPECS if s['key'].startswith('brake.')]
@@ -757,9 +786,22 @@ def _bold(st):
     return st
 
 
+def parse_intlist4(text):
+    """'1,2,3,4' -> [1, 2, 3, 4]。空欄は None。形が違えば ValueError (各 1〜128 の整数 4 つ)。"""
+    raw = str(text).replace('、', ',').replace(',', ' ').replace('[', ' ').replace(']', ' ').split()
+    if not raw:
+        return None
+    nums = [int(x) for x in raw]
+    if len(nums) != 4 or any(n < 1 or n > 128 for n in nums):
+        raise ValueError(text)
+    return nums
+
+
 def _fmt_default(v):
     if v is None:
         return 'null'
+    if isinstance(v, list):
+        return json.dumps(v)
     if v is True:
         return 'true'
     if v is False:
@@ -810,12 +852,17 @@ class ParamRow(wx.Panel):
         elif kind == 'int':
             self.ctrl.Bind(wx.EVT_SPINCTRL, self._on_event)
             self.ctrl.Bind(wx.EVT_TEXT, self._on_event)
+        elif kind == 'intlist4_or_null':
+            self.ctrl.Bind(wx.EVT_TEXT, self._on_event)
         else:
             self.ctrl.Bind(wx.EVT_SPINCTRLDOUBLE, self._on_event)
             self.ctrl.Bind(wx.EVT_TEXT, self._on_event)
 
     def _make_ctrl(self, spec):
         kind = spec['kind']
+        if kind == 'intlist4_or_null':
+            self.last_list = None
+            return wx.TextCtrl(self, size=(160, -1))
         if kind == 'choice':
             return wx.Choice(self, choices=list(spec['choices']))
         if kind == 'bool':
@@ -835,6 +882,12 @@ class ParamRow(wx.Panel):
             return bool(self.ctrl.GetValue())
         if kind == 'int':
             return int(self.ctrl.GetValue())
+        if kind == 'intlist4_or_null':
+            try:
+                self.last_list = parse_intlist4(self.ctrl.GetValue())
+            except Exception:
+                pass                # 形が悪い間は、最後に正しかった値のまま
+            return self.last_list
         if kind == 'floatnull' and not self.nullchk.GetValue():
             return None
         return float(round(self.ctrl.GetValue(), 4))
@@ -854,6 +907,14 @@ class ParamRow(wx.Panel):
             if not _is_int(v):
                 raise ValueError(v)
             self.ctrl.SetValue(v)
+        elif kind == 'intlist4_or_null':
+            if v is None:
+                self.ctrl.ChangeValue('')
+            else:
+                if not isinstance(v, list) or len(v) != 4 or not all(_is_int(n) and 1 <= n <= 128 for n in v):
+                    raise ValueError(v)
+                self.ctrl.ChangeValue(', '.join(str(n) for n in v))
+            self.last_list = v
         else:
             if kind == 'floatnull':
                 self.nullchk.SetValue(v is not None)
@@ -890,6 +951,11 @@ class ParamRow(wx.Panel):
             if self.spec['kind'] == 'floatnull':
                 self.ctrl.Enable(on and self.nullchk.GetValue())
         d = _fmt_default(self.spec['default'])
+        if self.spec['kind'] == 'intlist4_or_null':
+            try:
+                parse_intlist4(self.ctrl.GetValue())
+            except Exception:
+                d = '{}   入力が正しくありません (1〜128 の整数を 4 つ)'.format(d)
         if self.chk.GetValue():
             self.state.SetLabel('既定値: {}'.format(d))
         else:
@@ -926,6 +992,12 @@ class LogTab(wx.Panel):
 
         self.txt = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP | wx.TE_RICH2)
         self.txt.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        try:                            # 黒い背景に明るい文字 (警告は黄、エラーは薄い赤)
+            self.txt.SetBackgroundColour(wx.Colour(*LOG_BG))
+            self.txt.SetForegroundColour(wx.Colour(*LOG_FG))
+            self._set_log_colour(LOG_FG)
+        except Exception:
+            pass
         self.hint = _gray(wx.StaticText(self, label='ジョイスティックを起動するとここにログが出ます'))
         self.filter_box = wx.TextCtrl(self, size=(200, -1))
         self.btn_pause = wx.ToggleButton(self, label='一時停止')
@@ -965,10 +1037,33 @@ class LogTab(wx.Panel):
             line = '[VC-GUI] ' + text
             self.lines.append(line)
             if not self.paused and (not self.flt or self.flt.lower() in line.lower()):
-                self.txt.AppendText(line + '\n')
-                self.txt.ShowPosition(self.txt.GetLastPosition())
+                self._append_lines([line])
         except Exception:
             pass
+
+    def _set_log_colour(self, rgb):
+        self.txt.SetDefaultStyle(wx.TextAttr(wx.Colour(*rgb), wx.Colour(*LOG_BG)))
+
+    def _append_lines(self, lines):
+        """行を足す。警告・エラーの行は色を変える。"""
+        for line in lines:
+            low = line.lower()
+            if 'error' in low or 'exception' in low or 'traceback' in low or 'エラー' in line:
+                rgb = LOG_ERR
+            elif 'warn' in low or '警告' in line:
+                rgb = LOG_WARN
+            else:
+                rgb = LOG_FG
+            try:
+                self._set_log_colour(rgb)
+            except Exception:
+                pass
+            self.txt.AppendText(line + '\n')
+        try:
+            self._set_log_colour(LOG_FG)
+        except Exception:
+            pass
+        self.txt.ShowPosition(self.txt.GetLastPosition())
 
     def _visible_lines(self, lines):
         if not self.flt:
@@ -978,8 +1073,12 @@ class LogTab(wx.Panel):
 
     def refresh_view(self):
         shown = self._visible_lines(self.lines)
-        self.txt.SetValue('\n'.join(shown) + ('\n' if shown else ''))
-        self.txt.ShowPosition(self.txt.GetLastPosition())
+        self.txt.Freeze()
+        try:
+            self.txt.SetValue('')
+            self._append_lines(shown)
+        finally:
+            self.txt.Thaw()
 
     def on_timer(self, event):
         try:
@@ -1009,8 +1108,7 @@ class LogTab(wx.Panel):
             return
         shown = self._visible_lines(new_lines)
         if shown:
-            self.txt.AppendText('\n'.join(shown) + '\n')
-            self.txt.ShowPosition(self.txt.GetLastPosition())
+            self._append_lines(shown)
 
     def on_filter(self, event):
         self.flt = self.filter_box.GetValue().strip()
@@ -1230,14 +1328,28 @@ class PreviewPanel(wx.Panel):
     }
 
     def __init__(self, parent):
-        wx.Panel.__init__(self, parent, size=(PREVIEW_SIZE, PREVIEW_SIZE))
-        self.SetMinSize((PREVIEW_SIZE, PREVIEW_SIZE))
-        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
         self.entries = []
         self.caption = ''
         self.highlight = None       # 光らせるスロットの添字 (0 始まり。無ければ None)
+        # wx 4.0 では、最初に描く前に BG_STYLE_PAINT を決めておく (作る前に決めて、作る)
+        wx.Panel.__init__(self)
+        try:
+            self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        except Exception:
+            pass
+        self.Create(parent, size=(PREVIEW_SIZE, PREVIEW_SIZE))
+        try:
+            self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        except Exception:
+            pass
+        self.SetMinSize((PREVIEW_SIZE, PREVIEW_SIZE))
         self.Bind(wx.EVT_PAINT, self.on_paint)
-        self.Bind(wx.EVT_SIZE, lambda e: (self.Refresh(), e.Skip()))
+        self.Bind(wx.EVT_ERASE_BACKGROUND, lambda e: None)
+        self.Bind(wx.EVT_SIZE, self.on_size)
+
+    def on_size(self, event):
+        self.Refresh()
+        event.Skip()
 
     def set_level(self, entries, caption='', highlight=None):
         self.entries = entries
@@ -1246,14 +1358,34 @@ class PreviewPanel(wx.Panel):
         self.Refresh()
 
     def on_paint(self, event):
+        pdc = wx.PaintDC(self)          # 必ず作る (作らないと描き直しが続く)
+        try:
+            w, h = self.GetClientSize()
+            if w < 2 or h < 2:
+                return                  # 0 x 0 のときは描かない
+            bmp = wx.Bitmap(w, h)
+            dc = wx.MemoryDC(bmp)
+            try:
+                dc.SetBackground(wx.Brush(wx.Colour(30, 32, 36)))
+                dc.Clear()
+                try:
+                    self._draw(dc, w, h)
+                except Exception as e:
+                    dc.SetTextForeground(wx.Colour(235, 235, 235))
+                    dc.DrawText('見本を描けません: {}'.format(e), 6, 6)
+            finally:
+                dc.SelectObject(wx.NullBitmap)
+            pdc.DrawBitmap(bmp, 0, 0)
+        except Exception:
+            pass
+
+    def _draw(self, dc, w, h):
         import math
-        dc = wx.AutoBufferedPaintDC(self)
-        dc.SetBackground(wx.Brush(wx.Colour(30, 32, 36)))
-        dc.Clear()
         gc = wx.GraphicsContext.Create(dc)
         if gc is None:
+            dc.SetTextForeground(wx.Colour(235, 235, 235))
+            dc.DrawText(self.caption, 6, 3)
             return
-        w, h = self.GetClientSize()
         cx, cy = w / 2.0, h / 2.0 + 6
         big = min(w, h / 1.0) / 2.0 - 14
         small = big * 0.26
@@ -1454,6 +1586,7 @@ class PanelTab(wx.Panel):
         self.cur_item = None       # 選んでいる項目の dict (空きなら None)
         self.loading = False
         self.rebuilding = False
+        self.last_problems = None
         self.node_of = {}
         self.brake_rows = []
         self.left_fname = None     # 左の見本に出している階層 (右を選んでいる間も覚えておく)
@@ -1510,11 +1643,17 @@ class PanelTab(wx.Panel):
         self.SetSizer(v)
 
         self.tree.Bind(wx.EVT_TREE_SEL_CHANGED, self.on_tree_sel)
+        self.Bind(wx.EVT_SHOW, self.on_show_event)
         self.btn_add.Bind(wx.EVT_BUTTON, self.on_add_slot)
         self.btn_del.Bind(wx.EVT_BUTTON, self.on_delete)
         self.btn_folder.Bind(wx.EVT_BUTTON, self.on_add_folder)
         self.btn_up.Bind(wx.EVT_BUTTON, lambda e: self.on_move(-1))
         self.btn_down.Bind(wx.EVT_BUTTON, lambda e: self.on_move(1))
+
+    def on_show_event(self, event):
+        event.Skip()
+        if event.IsShown():
+            self.on_shown()
 
     def _mk_row(self, parent, text, make_ctrl, expand=False):
         p = wx.Panel(parent)
@@ -1618,6 +1757,32 @@ class PanelTab(wx.Panel):
         self.cur_item = None
         self.rebuild_tree(None)
         self.refresh_all_views()
+        self.refresh_previews_later()
+
+    def refresh_previews_later(self):
+        """見本を今すぐ描き直し、画面ができたあとにもう一度描き直す。"""
+        self._force_previews()
+        try:
+            wx.CallAfter(self._force_previews)
+        except Exception:
+            pass
+
+    def _force_previews(self):
+        for pv in (self.preview_l, self.preview_r):
+            try:
+                pv.Refresh()
+                pv.Update()
+            except Exception:
+                pass
+
+    def on_shown(self):
+        """タブが前に出たとき: 配置を整えて、見本を描く。"""
+        try:
+            self.Layout()
+            self.refresh_preview()
+        except Exception:
+            pass
+        self.refresh_previews_later()
 
     # ---- 木 ----
     def _slot_range(self, table, root):
@@ -1642,6 +1807,14 @@ class PanelTab(wx.Panel):
     def rebuild_tree(self, select):
         """木を作り直す。select = 選び直したい印。見つからなければ近い親を選ぶ。"""
         self.rebuilding = True
+        old_first = None
+        try:                            # 作り直す前に、画面の一番上に見えている印を覚える
+            it = self.tree.GetFirstVisibleItem()
+            if it.IsOk():
+                old_first = self.tree.GetItemData(it)
+        except Exception:
+            old_first = None
+        self.tree.Freeze()
         try:
             self.tree.DeleteAllItems()
             self.node_of = {}
@@ -1673,6 +1846,7 @@ class PanelTab(wx.Panel):
                 self._add_slot_nodes(rnode, 'right', 'items', rtable, True)
             self.tree.ExpandAll()
         finally:
+            self.tree.Thaw()
             self.rebuilding = False
         target = select if select in self.node_of else None
         if target is None and select is not None:
@@ -1682,6 +1856,13 @@ class PanelTab(wx.Panel):
         if target is None:
             target = ('side', 'left')
         self.tree.SelectItem(self.node_of[target])
+        try:                            # 位置をできるだけ元に戻し、選んだ行は必ず見えるようにする
+            if old_first is not None and old_first in self.node_of:
+                self.tree.ScrollTo(self.node_of[old_first])
+            self.tree.EnsureVisible(self.node_of[target])
+            self.tree.Refresh()
+        except Exception:
+            pass
         self.on_selection(target)
 
     def _add_slot_nodes(self, parent, side, fname, table, root):
@@ -2133,7 +2314,14 @@ class PanelTab(wx.Panel):
             self.rebuild_tree(select if select is not None else self.cur)
             return
         if self.cur is not None and self.cur[0] == 'slot' and self.cur_item is not None and self.cur in self.node_of:
-            self.tree.SetItemText(self.node_of[self.cur], self._item_text(self.cur[3], self.cur_item))
+            node = self.node_of[self.cur]
+            text = self._item_text(self.cur[3], self.cur_item)
+            try:
+                if self.tree.GetItemText(node) != text:     # 変わったときだけ。その行だけ書き換える
+                    self.tree.SetItemText(node, text)
+                    self.tree.RefreshRect(self.tree.GetClientRect())
+            except Exception:
+                pass
         if reload_form:
             self.loading = True
             try:
@@ -2177,6 +2365,17 @@ class PanelTab(wx.Panel):
 
     def refresh_validation(self):
         problems = validate_panels(self.model.data)
+        if self.last_problems is not None and self.last_problems == problems:
+            return                      # 変わっていなければ作り直さない (ちらつきと黒い行を避ける)
+        self.last_problems = [tuple(p) for p in problems]
+        bg = self.val.GetBackgroundColour()
+        self.val.Freeze()
+        try:
+            self._fill_validation(problems, bg)
+        finally:
+            self.val.Thaw()
+
+    def _fill_validation(self, problems, bg):
         self.val.DeleteAllItems()
         label = {'error': 'エラー', 'warn': '警告', 'info': '情報'}
         colour = {'error': RED, 'warn': ORANGE, 'info': GRAY}
@@ -2187,6 +2386,10 @@ class PanelTab(wx.Panel):
             self.val.SetItem(i, 1, where)
             self.val.SetItem(i, 2, msg)
             self.val.SetItemTextColour(i, wx.Colour(*colour.get(lv, GRAY)))
+            try:                        # 文字色だけ決めると行の背景が黒くなる環境があるので、背景も明示する
+                self.val.SetItemBackgroundColour(i, bg)
+            except Exception:
+                pass
 
 
 # ==============================================================================
@@ -2312,6 +2515,11 @@ class MainFrame(wx.Frame):
         page = self.nb.GetCurrentPage()
         self.bar.Show(page is self.settings_tab or page is self.panel_tab)
         self.bar.GetParent().Layout()
+        if page is self.panel_tab:
+            try:
+                self.panel_tab.on_shown()
+            except Exception as e:
+                self.set_status('見本を描き直せません: {}'.format(e))
         event.Skip()
 
     # ---- プロファイルの選び ----
