@@ -156,6 +156,11 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
         左 = コンフィグメニュー (プログラムが持つ 8 項目固定のパネル)、右 = 選んだ設定の値を変える補助。ゲームへの出力は止める。
         パネルの項目の命令 'config' でも入れる。変えた値は users/ のファイルに自動で保存し、次からも使う。
     (4) 01 の 3.4: 左スティックを倒している間は、右パネルを動かさない (RIGHT_PANEL_BLOCKED_BY_LEFT)。
+  0.1.44: VC コンソール (vc_gui.py) を表の窓にする (実機確認 2026-11-23)。
+    本体は VC_STATUS_FILE に今の状態 (版・読んでいるプロファイル・一覧・コンフィグ中か) を書き、VC_CMD_FILE の命令を読む
+    (プロファイルの切り替え・読み直し・デバッグコマンド・コンソールの窓を出す / 隠す・終了)。
+    VC_HIDE_CONSOLE なら、起動が済んで VC コンソールが生きている (VC_GUI_ALIVE_FILE が新しい) 間、黒いコンソールの窓を隠す。
+    VC コンソールが閉じたら (印が古くなったら) コンソールの窓を出し直す (操作の手段を無くさないため)。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -259,7 +264,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.43'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.44'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -1375,6 +1380,173 @@ def vc_log_install():
 vc_log_install()
 
 
+# --- (0.1.44) VC コンソールとのつなぎ -----------------------------------------------------------------------
+# ファイル 3 つ (どれも media/ の中。git には入れない):
+#   VC_STATUS_FILE     本体が書く。JSON 1 つ: {"format": "vc-status", "pid", "app_version", "profile_file", "profile_name",
+#                      "profiles": [ファイル名...], "config_mode", "console_hidden", "time"}。変わったときと VC_STATUS_EVERY_SEC ごと。
+#   VC_CMD_FILE        VC コンソールが 1 行に 1 つの JSON を書き足す。本体は起動時に空にし、読んだところから先を読む。
+#                      {"cmd": "profile_load", "file": "x.json"} / {"cmd": "profile_reload"} / {"cmd": "debug", "name": "..."} /
+#                      {"cmd": "console", "show": true か false} / {"cmd": "quit"}
+#   VC_GUI_ALIVE_FILE  VC コンソールが 1 秒ごとに今の時刻 (time.time() の数) を書く。本体は VC_GUI_ALIVE_SEC より古ければ「いない」とみなす。
+VC_STATUS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'media', 'vc_status.json')   # [CONFIG] (0.1.44)
+VC_CMD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'media', 'vc_cmd.txt')          # [CONFIG] (0.1.44)
+VC_GUI_ALIVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'media', 'vc_gui_alive.txt')   # [CONFIG] (0.1.44)
+VC_GUI_ALIVE_SEC = 5.0                     # [CONFIG] (0.1.44) VC コンソールの生存の印がこれより古ければ、いないとみなす [秒]
+VC_STATUS_EVERY_SEC = 1.0                  # [CONFIG] (0.1.44) 状態のファイルを書き直す間隔 [秒] (変わったときはすぐ)
+VC_CMD_POLL_SEC = 0.25                     # [CONFIG] (0.1.44) 命令のファイルを見る間隔 [秒]
+VC_HIDE_CONSOLE = True                     # [CONFIG] (0.1.44) VC コンソールが生きている間、黒いコンソールの窓を隠す (Windows だけ)。
+                                           #   False = 隠さない。VC コンソールが閉じたら、隠していた窓は出し直す
+
+
+def console_window_show(show):
+    """(0.1.44) このプロセスのコンソールの窓を出す / 隠す (Windows だけ)。できたら True。"""
+    if os.name != 'nt':
+        return False
+    try:
+        import ctypes
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if not hwnd:
+            return False
+        ctypes.windll.user32.ShowWindow(hwnd, 5 if show else 0)    # 5 = SW_SHOW、0 = SW_HIDE
+        return True
+    except Exception as e:
+        print("[GUI] Warning: コンソールの窓を{}せん: {}".format('出せま' if show else '隠せま', e))
+        return False
+
+
+def vc_gui_alive(now=None):
+    """(0.1.44) VC コンソールの生存の印が新しいか。"""
+    try:
+        with open(VC_GUI_ALIVE_FILE, 'r') as f:
+            t = float(f.read().strip() or 0)
+        return ((now or time.time()) - t) < VC_GUI_ALIVE_SEC
+    except Exception:
+        return False
+
+
+class VcLink(object):
+    """(0.1.44) 本体の側の VC コンソールとのつなぎ (上の説明)。Joystick が 1 つ持ち、毎フレーム frame() を呼ぶ。"""
+
+    def __init__(self, owner):
+        self.owner = owner
+        self.console_hidden = False
+        self.console_forced = None     # VC コンソールの命令で決めた出す / 隠す (None = 自動)
+        self._cmd_pos = 0
+        self._t_cmd = 0.0
+        self._t_status = 0.0
+        self._t_alive = 0.0
+        self._alive = False
+        self._last_status = None
+        try:
+            with open(VC_CMD_FILE, 'w', encoding='utf-8') as f:
+                f.write('')
+        except Exception as e:
+            print("[GUI] Warning: {} を作れません (VC コンソールからの命令は使えません): {}".format(VC_CMD_FILE, e))
+
+    def frame(self, now):
+        if now - self._t_cmd >= VC_CMD_POLL_SEC:
+            self._t_cmd = now
+            self._read_commands()
+        if now - self._t_alive >= 1.0:
+            self._t_alive = now
+            self._alive = vc_gui_alive(now)
+            self._console_frame()
+        self._write_status(now)
+
+    def _console_frame(self):
+        if not VC_HIDE_CONSOLE and self.console_forced is None:
+            return
+        want_hidden = self._alive and (self.console_forced is not True) and (VC_HIDE_CONSOLE or self.console_forced is False)
+        if not self._alive:
+            want_hidden = False                    # VC コンソールがいないときは必ず出す (操作の手段を無くさない)
+        if want_hidden != self.console_hidden:
+            if console_window_show(not want_hidden):
+                self.console_hidden = want_hidden
+                print("[GUI] コンソールの窓を{} ({})".format('隠しました' if want_hidden else '出しました',
+                      'VC コンソールが開いている' if self._alive else 'VC コンソールが閉じた'))
+
+    def status(self):
+        js = self.owner
+        inp = js.inputs
+        prof = os.path.basename(inp.profile_path) if (inp is not None and inp.profile_path) else None
+        return {'format': 'vc-status', 'format_version': 1, 'pid': os.getpid(), 'app_version': APP_VERSION,
+                'profile_file': prof, 'profile_name': inp.profile_name if inp is not None else None,
+                'profiles': list_input_profiles(),
+                'config_mode': bool(getattr(js, 'cfgmode', None) is not None and js.cfgmode.active),
+                'console_hidden': self.console_hidden}
+
+    def _write_status(self, now):
+        try:
+            st = self.status()
+        except Exception as e:
+            st = {'format': 'vc-status', 'error': str(e)}
+        if st == self._last_status and now - self._t_status < VC_STATUS_EVERY_SEC:
+            return
+        self._last_status = st
+        self._t_status = now
+        out = dict(st)
+        out['time'] = now
+        try:
+            tmp = VC_STATUS_FILE + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(out, f, ensure_ascii=False)
+            os.replace(tmp, VC_STATUS_FILE)
+        except Exception:
+            pass                                   # 書けなくても操作には影響させない
+
+    def _read_commands(self):
+        try:
+            if not os.path.exists(VC_CMD_FILE):
+                return
+            with open(VC_CMD_FILE, 'rb') as f:
+                f.seek(self._cmd_pos)
+                data = f.read()
+        except Exception:
+            return
+        end = data.rfind(b'\n')
+        if end < 0:
+            return
+        self._cmd_pos += end + 1
+        for raw in data[:end].split(b'\n'):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                c = json.loads(raw.decode('utf-8'))
+            except Exception:
+                print("[GUI] Warning: 読めない命令を捨てました: {!r}".format(raw[:80]))
+                continue
+            try:
+                self.run(c)
+            except Exception as e:
+                print("[GUI] Warning: 命令 {} に失敗: {}: {}".format(c.get('cmd'), type(e).__name__, e))
+
+    def run(self, c):
+        js = self.owner
+        cmd = c.get('cmd')
+        if cmd == 'profile_load':
+            print("[GUI] VC コンソールから: プロファイル {}".format(c.get('file')))
+            js.input_profile_load(os.path.basename(str(c.get('file'))))
+            if js.cfgmode.active and js.inputs is not None:
+                js.inputs.config_mode = True
+        elif cmd == 'profile_reload':
+            cur = js.inputs.profile_path if js.inputs is not None else None
+            if cur:
+                print("[GUI] VC コンソールから: 今のプロファイルを読み直す")
+                js.input_profile_load(os.path.basename(cur), keep_prev=True)
+                if js.cfgmode.active and js.inputs is not None:
+                    js.inputs.config_mode = True
+        elif cmd == 'debug':
+            js.debug_command(str(c.get('name')))
+        elif cmd == 'console':
+            self.console_forced = bool(c.get('show'))   # True = 出す、False = 隠す (VC コンソールが閉じたら、どちらでも出す)
+            self._console_frame()
+        elif cmd == 'quit':
+            js.vc_quit()
+        else:
+            print("[GUI] Warning: 知らない命令 {!r}".format(cmd))
+
+
 def vc_gui_start():
     """(0.1.42) VC コンソール (vc_gui.py) を別のプロセスで開く。窓は 1 つだけ (vc_gui 側が 2 つ目を閉じる)。
     pythonw.exe があればそれで開く (黒いコンソールの窓を増やさない)。失敗したら 1 行出して続ける。"""
@@ -1391,9 +1563,10 @@ def vc_gui_start():
     cmd = [exe, '-m', 'steam_vr_wheel.vc_gui']
     if VC_LOG_FILE:
         cmd += ['--log', VC_LOG_FILE]
+    cmd += ['--status', VC_STATUS_FILE, '--cmd', VC_CMD_FILE, '--alive', VC_GUI_ALIVE_FILE]   # 0.1.44
     try:
         proc = subprocess.Popen(cmd, cwd=os.path.dirname(pkg))
-        print("[GUI] VC コンソールを開きました (VC_GUI_AUTOSTART。閉じても操作には影響しません)")
+        print("[GUI] VC コンソールを開きました (閉じたら、隠していたこの窓を出し直します)")
         return proc
     except Exception as e:
         print("[GUI] Warning: VC コンソールを開けません: {}".format(e))
@@ -7885,8 +8058,13 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         self.throttle_y = Throttle(size=0.2, sensitivity=1.0, enable_limiter=False)
         self.throttle_x = Throttle(size=90, sensitivity=1.0, enable_limiter=False)
 
-        if VC_GUI_AUTOSTART:
-            vc_gui_start()             # 0.1.42: PC の画面の窓 (ログ・設定・パネルの編集)
+        self.vclink = None
+        try:
+            self.vclink = VcLink(self)     # 0.1.44: VC コンソールとのつなぎ (状態・命令・コンソールの窓)
+        except Exception as e:
+            print("[GUI] Warning: VC コンソールとつなげません: {}".format(e))
+        if VC_GUI_AUTOSTART and not vc_gui_alive():
+            vc_gui_start()             # 0.1.42: PC の画面の窓 (ログ・設定・パネルの編集)。0.1.44: もう開いていれば、それを使う
         self.cfgmode = ConfigMode(self)  # 0.1.43: コンフィグモード
         self._config_request = False   # 0.1.43: パネルの項目 'config' で入る
         self._user_applied = False     # 0.1.43: users/vc_user.json を HUD に効かせたか
@@ -8609,6 +8787,30 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             return False
         return True
 
+    def vc_quit(self):
+        """(0.1.44) VC コンソールの「終了」: 押しているボタンを離し、コンソールの窓を出してから、プロセスを終える。"""
+        print("[GUI] VC コンソールから終了の命令。ボタンを離して終了します")
+        try:
+            if self.inputs is not None:
+                self.inputs.release_panel_buttons()
+                self.inputs.config_mode = False
+                self.inputs.release_all()
+            if self.assist is not None:
+                self._drive_buttons(self.assist.release())
+        except Exception as e:
+            print("[GUI] Warning: 離すときに失敗: {}".format(e))
+        console_window_show(True)
+        try:
+            openvr.shutdown()
+        except Exception:
+            pass
+        import sys
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        os._exit(0)
+
     def _poll_calibration_key(self):
         """コンソールのキーを DEBUG_KEYMAP でデバッグコマンドに変えて実行する (Windows のみ)。"""
         if msvcrt is None:
@@ -8651,6 +8853,8 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         """手首ピボット補正した (y, z)。行列が取れない/オフセット0なら従来どおり left_ctr.y / .z。"""
         y, z = left_ctr.y, left_ctr.z
         self._poll_calibration_key()
+        if self.vclink is not None:
+            self.vclink.frame(time.time())      # 0.1.44
         self._tick_calibration(left_ctr)
         if self._pivot_source == 'constant' and THROTTLE_REF_COMPONENT and not self._component_tried:
             self._component_tried = True

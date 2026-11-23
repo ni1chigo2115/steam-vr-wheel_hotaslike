@@ -4,7 +4,7 @@
   "profile": {
     "id": "test_panels",
     "name": "テスト: パネル (01 の既定の並び)",
-    "note": "左は 01 の 3.2 の動作テスト用の並び、右は 3.1 の AC8 風の一例。ボタンは確かめ用の仮の番号 (19〜27)。左トリガーはパネルの実行だけ (元の軸 SL0・ボタン 1・触れた 31 は unbind で止める)。右トリガーは半押し = パネルの実行、引き切り = ボタン 9 (GUN) で、元の軸 SL1 と触れた 32 は止める。MNVR は 1 ボタンの仮 (同時押しは args の buttons に番号を並べる)。ボタンの無い項目はコンソールに出るだけ。警告 2 行 ('0' と more の '1') はわざと。0.1.42: 3 BRAKE = 左トリガーで疑似ブレーキ (RZ から引く)、5 CRUISE = トリガーのダブルクリックで入る / 切る (2 回倒すとセンター)、6 MNVR は HUD の MNVR の印、8 MORE の中に CRUISE C / CRUISE OFF (1 回のトリガー) と BRAKE BTN (ボタン 28 のブレーキ)。0.1.43: 7 CONFIG = トリガーでコンフィグモードへ (両スティックを上に 1.5 秒でも入る / 戻る)、右の TGT は \"latch\": false (スティックを戻すと前の武器の表示に戻る)"
+    "note": "左は 01 の 3.2 の動作テスト用の並び、右は 3.1 の AC8 風の一例。ボタンは確かめ用の仮の番号 (19〜27)。左トリガーはパネルの実行だけ (元の軸 SL0・ボタン 1・触れた 31 は unbind で止める)。右トリガーは半押し = パネルの実行、引き切り = ボタン 9 (GUN) で、元の軸 SL1 と触れた 32 は止める。MNVR は 1 ボタンの仮 (同時押しは args の buttons に番号を並べる)。ボタンの無い項目はコンソールに出るだけ。警告 2 行 ('0' と more の '1') はわざと。0.1.42: 3 BRAKE = 左トリガーで疑似ブレーキ (RZ から引く)、5 CRUISE = トリガーのダブルクリックで入る / 切る (2 回倒すとセンター)、6 MNVR は HUD の MNVR の印、8 MORE の中に CRUISE C / CRUISE OFF (1 回のトリガー) と BRAKE BTN (ボタン 28 のブレーキ)。0.1.43: 7 CONFIG = トリガーでコンフィグモードへ (両スティックを上に 1.5 秒でも入る / 戻る)、右の TGT は \"latch\": false (スティックを戻すと前の武器の表示に戻る)。0.1.44: 左 4 を REST から FLARE (ボタン 29) に"
   },
   "settings": {},
   "input": {
@@ -24,7 +24,7 @@
           "1": {"label": "SELECT", "command": "vjoy_button", "args": {"button": 20}},
           "2": {"label": "PAUSE", "command": "vjoy_button", "args": {"button": 21}},
           "3": {"label": "BRAKE", "command": "brake"},
-          "4": {"label": "REST", "type": "REST"},
+          "4": {"label": "FLARE", "command": "vjoy_button", "args": {"button": 29}},
           "5": {"label": "CRUISE", "command": "cruise"},
           "6": {"label": "MNVR", "command": "vjoy_button", "args": {"button": 23}, "hud": "mnvr"},
           "7": {"label": "CONFIG", "command": "config"},

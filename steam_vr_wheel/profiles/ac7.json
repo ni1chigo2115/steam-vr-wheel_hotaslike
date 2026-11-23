@@ -1,0 +1,162 @@
+{
+  "format": "vc-profile",
+  "format_version": 1,
+  "profile": {
+    "id": "ac7",
+    "name": "AC7 (実戦用)",
+    "note": "test_panels を元にした実戦用の並び (テスト用のわざとの警告は外した)。ゲームの側で vJoy のボタンを次の項目に割り当てる (AC7 の Input.ini の名前): 9 = Gun (右トリガーの引き切り)、19 = SelectMissiles、24 = SelectSpecialWeapon1、25 = SelectSpecialWeapon2 (この 3 つは hotasmod の項目。あるかは要検証)、30 = Weapon (兵装の切り替え。ゲームの元からある項目)、22 = Gear、26 = Target、27 = Radar、29 = Flare、20 = View、21 = Pause、23 = MNVR (AC7 に無ければ空き)。スロットルは vJoy の RZ を Throttle に。"
+  },
+  "settings": {},
+  "input": {
+    "base": "default",
+    "unbind": [
+      "left.trigger_value",
+      "left.trigger_full",
+      "left.trigger_touch",
+      "right.trigger_value",
+      "right.trigger_touch"
+    ],
+    "bindings": [
+      {
+        "input": "left.trigger_half",
+        "command": "panel_execute",
+        "args": {
+          "panel": "left_game"
+        }
+      },
+      {
+        "input": "right.trigger_half",
+        "command": "panel_execute",
+        "args": {
+          "panel": "right_game"
+        }
+      }
+    ]
+  },
+  "panels": {
+    "left_game": {
+      "root": "main",
+      "folders": {
+        "main": {
+          "1": {
+            "label": "VIEW",
+            "command": "vjoy_button",
+            "args": {
+              "button": 20
+            }
+          },
+          "2": {
+            "label": "PAUSE",
+            "command": "vjoy_button",
+            "args": {
+              "button": 21
+            }
+          },
+          "3": {
+            "label": "BRAKE",
+            "command": "brake"
+          },
+          "4": {
+            "label": "FLARE",
+            "command": "vjoy_button",
+            "args": {
+              "button": 29
+            }
+          },
+          "5": {
+            "label": "CRUISE",
+            "command": "cruise"
+          },
+          "6": {
+            "label": "MNVR",
+            "command": "vjoy_button",
+            "args": {
+              "button": 23
+            },
+            "hud": "mnvr"
+          },
+          "7": {
+            "label": "CONFIG",
+            "command": "config"
+          },
+          "8": {
+            "label": "MORE",
+            "folder": "more"
+          }
+        },
+        "more": {
+          "2": {
+            "label": "CRUISE C",
+            "command": "cruise",
+            "args": {
+              "action": "center"
+            }
+          },
+          "3": {
+            "label": "CRUISE OFF",
+            "command": "cruise",
+            "args": {
+              "action": "off"
+            }
+          }
+        }
+      }
+    },
+    "right_game": {
+      "items": {
+        "1": {
+          "label": "MISSILE",
+          "command": "vjoy_button",
+          "args": {
+            "button": 19
+          }
+        },
+        "2": {
+          "label": "SPT1",
+          "command": "vjoy_button",
+          "args": {
+            "button": 24
+          }
+        },
+        "3": {
+          "label": "SPT2",
+          "command": "vjoy_button",
+          "args": {
+            "button": 25
+          }
+        },
+        "4": {
+          "label": "WPN",
+          "command": "vjoy_button",
+          "args": {
+            "button": 30
+          }
+        },
+        "5": {
+          "label": "GEAR",
+          "exec": "trigger",
+          "block_a": true,
+          "command": "vjoy_button",
+          "args": {
+            "button": 22
+          }
+        },
+        "6": {
+          "label": "TGT",
+          "command": "vjoy_button",
+          "args": {
+            "button": 26
+          },
+          "latch": false
+        },
+        "7": {
+          "label": "RADAR",
+          "command": "vjoy_button",
+          "args": {
+            "button": 27
+          }
+        }
+      }
+    }
+  }
+}

@@ -24,7 +24,7 @@
           "1": {"label": "SELECT", "command": "vjoy_button", "args": {"button": 20}},
           "2": {"label": "PAUSE", "command": "vjoy_button", "args": {"button": 21}},
           "3": {"label": "BRAKE", "command": "brake"},
-          "4": {"label": "REST", "type": "REST"},
+          "4": {"label": "FLARE", "command": "vjoy_button", "args": {"button": 29}},
           "5": {"label": "CRUISE", "command": "cruise"},
           "6": {"label": "MNVR", "command": "vjoy_button", "args": {"button": 23}, "hud": "mnvr"},
           "7": {"label": "CONFIG", "command": "config"},

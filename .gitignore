@@ -9,3 +9,7 @@ dist
 steam_vr_wheel/media/vc_log.txt
 users/
 steam_vr_wheel/media/users/
+steam_vr_wheel/media/vc_status.json
+steam_vr_wheel/media/vc_status.json.tmp
+steam_vr_wheel/media/vc_cmd.txt
+steam_vr_wheel/media/vc_gui_alive.txt

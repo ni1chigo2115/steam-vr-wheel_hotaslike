@@ -14,13 +14,27 @@ VC コンソール (vc_gui.py): PC の画面に出す設定とログの窓。別
   - 二重起動はしない (wx.SingleInstanceChecker)。もう 1 つ動いていたら、何も言わずに終わる。
   - --profile: プロファイルのタブで最初に選ぶファイル (省略時は default.json)。ファイル名だけの引数も同じ意味 (古い書き方)。
   - --log: 読むログのパス (省略時は <このフォルダ>/media/vc_log.txt)。
+  - --status / --cmd / --alive: コクピット本体 (_joystick.py) との受け渡しファイル (下の「コクピットとの受け渡し」)。省略時は <このフォルダ>/media/ の既定の名前。
+  - 前の起動のまま開いている窓は、新しい本体にも使い回される。だから pid などを引数から覚えず、状態は毎回 status ファイルから読む。
   - ログは _joystick.py が 1 行ずつ (完全な行、UTF-8、改行は \n) 足す。ジョイスティックの起動時と、8 MB を超えたときに空にされる。
 
-■ タブ
+■ タブ (どのタブでも、窓の上にコクピットの状態の 1 行が出る)
+  0. コクピット  動いているコクピットの操作 (プロファイルの切り替え・読み直し・コンソールの出し隠し・デバッグ命令)。
   1. ログ       media/vc_log.txt を 250 ms ごとに読み足して出す。絞り込み・一時停止・消す・フォルダを開く。
   2. 設定       古い configurator と同じ項目。steam_vr_wheel.PadConfig 経由で読み書きし、変えたらすぐ保存する。
   3. プロファイル  profiles/*.json の "settings" を型つきの部品で編集する。書かないキーは書かないまま (= コードの既定)。
-  4. パネル     "panels" (left_game / right_game) の木と項目のフォームと丸い見本。警告の一覧は変えるたびに作り直す。
+  4. パネル     "panels" (left_game / right_game) の木と項目のフォームと丸い見本 (左右 2 つ並べる)。警告の一覧は変えるたびに作り直す。
+
+■ コクピットとの受け渡し (0.1.2。形は _joystick.py v0.1.44 と合わせてある)
+  - 読む: media/vc_status.json  本体が約 1 秒ごと (と変わったとき) に書く。
+      {"format":"vc-status","format_version":1,"pid","app_version","profile_file","profile_name","profiles":[...],"config_mode","console_hidden","time"}
+      time が 5 秒より古い、またはファイルが無いときは「止まっている」とみなす (STATUS_STALE_SEC)。
+  - 書く (足す): media/vc_cmd.txt  1 行に JSON 1 つ (UTF-8、\n 終わり)。毎回、追記モードで開く。
+      {"cmd":"profile_load","file":"x.json"} / {"cmd":"profile_reload"} / {"cmd":"debug","name":"hud_recenter"} / {"cmd":"console","show":true} / {"cmd":"quit"}
+  - 書く (上書き): media/vc_gui_alive.txt  1 秒ごとに str(time.time())。本体はこれが新しい間だけ黒いコンソールを隠す。
+      閉じるときは消す (消せなければ 0 を書く)。wx.Timer (TICK_MS) で書く。
+  - 保存したプロファイルが本体の今のプロファイルなら、自動で profile_reload を送る。
+  - 窓を閉じるとき、コクピットが動いていれば「コクピットも終了する / この窓だけ閉じる / キャンセル」を聞く。
 
 ■ ファイルの受け渡し (契約)
   - 読む: <このファイルのフォルダ>/media/vc_log.txt   (UTF-8、_joystick.py が 1 行ずつ足す。ジョイスティックの起動時に空にされる)
@@ -45,19 +59,24 @@ import time
 
 import wx
 
-VC_GUI_VERSION = '0.1.1'
+VC_GUI_VERSION = '0.1.2'
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(PACKAGE_DIR, 'media', 'vc_log.txt')
 PROFILE_DIR = os.path.join(PACKAGE_DIR, 'profiles')
+STATUS_PATH = os.path.join(PACKAGE_DIR, 'media', 'vc_status.json')      # 本体が書く状態
+CMD_PATH = os.path.join(PACKAGE_DIR, 'media', 'vc_cmd.txt')             # この窓が足す命令
+ALIVE_PATH = os.path.join(PACKAGE_DIR, 'media', 'vc_gui_alive.txt')     # この窓が 1 秒ごとに書く生存の印
 DEFAULT_PROFILE_FILE = 'default.json'
 
 LOG_POLL_MS = 250                       # [CONFIG] ログを読みに行く間隔 (ミリ秒)
 LOG_MAX_LINES = 3000                    # [CONFIG] 窓に残す行の数
 LOG_FIRST_READ_MAX_BYTES = 512 * 1024   # [CONFIG] 最初に開いたとき、ファイルの終わりからこれだけ読む
 LOG_READ_CHUNK_BYTES = 1024 * 1024      # [CONFIG] 1 回の読み込みの上限
-WINDOW_SIZE = (1120, 780)               # [CONFIG] 窓の大きさ
-PREVIEW_SIZE = 270                      # [CONFIG] パネルの見本の大きさ (画素)
+STATUS_STALE_SEC = 5.0                  # [CONFIG] status の time がこれより古ければ「止まっている」
+TICK_MS = 1000                          # [CONFIG] 生存の印を書く・状態を読む間隔 (ミリ秒)
+WINDOW_SIZE = (1200, 780)               # [CONFIG] 窓の大きさ
+PREVIEW_SIZE = 240                      # [CONFIG] パネルの見本の大きさ (画素。左右 2 つ並べる)
 LABEL_OK_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /.-+'   # [CONFIG] HUD の文字で出せるラベルの文字 (外れたら情報を出す)
 NEW_ITEM_LABEL = 'NEW'                  # [CONFIG] スロットを足したときのラベル
 
@@ -71,10 +90,82 @@ HUD_MARKS = ['mnvr', 'brake']
 VJOY_AXES = ['HID_USAGE_X', 'HID_USAGE_Y', 'HID_USAGE_Z', 'HID_USAGE_RX',
              'HID_USAGE_RY', 'HID_USAGE_RZ', 'HID_USAGE_SL0', 'HID_USAGE_SL1']
 
+DEBUG_COMMANDS = [('hud_recenter', 'HUD を基準に合わせ直す'), ('version', 'バージョンを出す'),
+                  ('drive_status', 'drive_status'), ('bus_status', 'bus_status')]   # 本体の debug 命令の名前
+
 GRAY = (110, 110, 110)
 RED = (190, 30, 30)
 ORANGE = (170, 100, 0)
 BLUE = (30, 80, 170)
+GREEN = (30, 130, 60)
+
+
+# ==============================================================================
+# コクピット本体との受け渡し (wx に頼らない)
+# ==============================================================================
+def read_cockpit_status(path, now=None):
+    """vc_status.json を読む。動いていれば dict、止まっている (無い・読めない・5 秒より古い) なら None。"""
+    try:
+        with io.open(path, 'r', encoding='utf-8') as f:
+            st = json.load(f)
+        if not isinstance(st, dict) or st.get('format') != 'vc-status':
+            return None
+        t = float(st.get('time'))
+    except Exception:
+        return None
+    if now is None:
+        now = time.time()
+    if now - t > STATUS_STALE_SEC:
+        return None
+    return st
+
+
+def send_cockpit_cmd(path, obj):
+    """命令を 1 行の JSON にして追記する。返り値 = (成功か, 1 行)。"""
+    try:
+        line = json.dumps(obj, ensure_ascii=False) + '\n'
+        with open(path, 'ab') as f:         # 毎回、追記モードで開く
+            f.write(line.encode('utf-8'))
+        return True, '命令を送りました: {}'.format(line.strip())
+    except Exception as e:
+        return False, '命令を送れません: {}'.format(e)
+
+
+def write_alive(path):
+    """生存の印 (今の時刻) を上書きする。失敗しても落とさず、成功かどうかだけ返す。"""
+    try:
+        with open(path, 'w') as f:
+            f.write(str(time.time()))
+        return True
+    except Exception:
+        return False
+
+
+def clear_alive(path):
+    """閉じるとき: 生存の印を消す。消せなければ 0 を書く。"""
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+        return
+    except Exception:
+        pass
+    try:
+        with open(path, 'w') as f:
+            f.write('0')
+    except Exception:
+        pass
+
+
+def same_profile_file(path, profile_file):
+    """path が profiles フォルダの profile_file (ファイル名) と同じファイルか。"""
+    try:
+        if not path or not profile_file:
+            return False
+        if os.path.basename(path).lower() != os.path.basename(str(profile_file)).lower():
+            return False
+        return os.path.normcase(os.path.abspath(os.path.dirname(path))) == os.path.normcase(os.path.abspath(PROFILE_DIR))
+    except Exception:
+        return False
 
 
 # ==============================================================================
@@ -868,6 +959,17 @@ class LogTab(wx.Panel):
         except Exception:
             pass
 
+    def add_note(self, text):
+        """この窓からの 1 行を、ログの表示に足す (ファイルには書かない)。"""
+        try:
+            line = '[VC-GUI] ' + text
+            self.lines.append(line)
+            if not self.paused and (not self.flt or self.flt.lower() in line.lower()):
+                self.txt.AppendText(line + '\n')
+                self.txt.ShowPosition(self.txt.GetLastPosition())
+        except Exception:
+            pass
+
     def _visible_lines(self, lines):
         if not self.flt:
             return lines
@@ -1133,12 +1235,14 @@ class PreviewPanel(wx.Panel):
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
         self.entries = []
         self.caption = ''
+        self.highlight = None       # 光らせるスロットの添字 (0 始まり。無ければ None)
         self.Bind(wx.EVT_PAINT, self.on_paint)
         self.Bind(wx.EVT_SIZE, lambda e: (self.Refresh(), e.Skip()))
 
-    def set_level(self, entries, caption=''):
+    def set_level(self, entries, caption='', highlight=None):
         self.entries = entries
         self.caption = caption
+        self.highlight = highlight
         self.Refresh()
 
     def on_paint(self, event):
@@ -1164,6 +1268,7 @@ class PreviewPanel(wx.Panel):
             return cx + r * math.sin(a), cy - r * math.cos(a)
 
         steps = 12
+        hl_path = None
         for i, (text, kind) in enumerate(self.entries):
             a0 = (i - 0.5) * 2 * math.pi / n
             a1 = (i + 0.5) * 2 * math.pi / n
@@ -1180,6 +1285,8 @@ class PreviewPanel(wx.Panel):
             gc.SetBrush(wx.Brush(wx.Colour(*self.COLORS.get(kind, (70, 110, 170)))))
             gc.SetPen(wx.Pen(wx.Colour(20, 20, 24), 2))
             gc.DrawPath(path)
+            if i == self.highlight:
+                hl_path = path
             label = '{} {}'.format(i + 1, text)
             if len(label) > 11:
                 label = label[:10] + '..'
@@ -1189,6 +1296,147 @@ class PreviewPanel(wx.Panel):
         gc.SetBrush(wx.Brush(wx.Colour(30, 32, 36)))
         gc.SetPen(wx.Pen(wx.Colour(20, 20, 24), 2))
         gc.DrawEllipse(cx - small, cy - small, small * 2, small * 2)
+        if hl_path is not None:     # 編集中のスロットは、黄色の太い縁で囲む
+            gc.SetPen(wx.Pen(wx.Colour(255, 215, 0), 4))
+            gc.StrokePath(hl_path)
+
+
+# ------------------------------------------------------------------------------
+# タブ 0: コクピット (動いている本体の操作)
+# ------------------------------------------------------------------------------
+class CockpitTab(wx.Panel):
+    def __init__(self, parent, frame):
+        wx.Panel.__init__(self, parent)
+        self.frame = frame
+        self.shown_profiles = None      # 選び欄に今入れている一覧 (変わったときだけ作り直す)
+        self.shown_file = None
+        self.ctrls = []                 # 止まっているときに無効にする部品
+
+        self.info = _bold(wx.StaticText(self, label=''))
+        self.ch = wx.Choice(self, size=(260, -1))
+        self.btn_switch = wx.Button(self, label='切り替え')
+        self.btn_reload = wx.Button(self, label='読み直し')
+        self.btn_show = wx.Button(self, label='コンソールを出す')
+        self.btn_hide = wx.Button(self, label='コンソールを隠す')
+        self.dbg_btns = []
+        for name, text in DEBUG_COMMANDS:
+            b = wx.Button(self, label=text)
+            b.dbg_name = name
+            self.dbg_btns.append(b)
+        self.ctrls = [self.ch, self.btn_switch, self.btn_reload, self.btn_show, self.btn_hide] + self.dbg_btns
+
+        v = wx.BoxSizer(wx.VERTICAL)
+        v.Add(self.info, 0, wx.ALL, 10)
+        v.Add(_bold(wx.StaticText(self, label='動かしているプロファイル')), 0, wx.LEFT | wx.TOP, 10)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(self.ch, 0, wx.RIGHT, 6)
+        row.Add(self.btn_switch, 0, wx.RIGHT, 6)
+        row.Add(self.btn_reload, 0)
+        v.Add(row, 0, wx.ALL, 10)
+        v.Add(_gray(wx.StaticText(self, label='切り替え = 選んだプロファイルを読み込ませる。読み直し = 今のプロファイルをファイルから読み直させる。')), 0, wx.LEFT, 10)
+        v.Add(_bold(wx.StaticText(self, label='黒いコンソール窓')), 0, wx.LEFT | wx.TOP, 18)
+        row2 = wx.BoxSizer(wx.HORIZONTAL)
+        row2.Add(self.btn_show, 0, wx.RIGHT, 6)
+        row2.Add(self.btn_hide, 0)
+        v.Add(row2, 0, wx.ALL, 10)
+        v.Add(_gray(wx.StaticText(self, label='この窓が開いている間、本体は黒いコンソール窓を隠します。')), 0, wx.LEFT, 10)
+        v.Add(_bold(wx.StaticText(self, label='デバッグ (結果は ログ のタブに出ます)')), 0, wx.LEFT | wx.TOP, 18)
+        row3 = wx.BoxSizer(wx.HORIZONTAL)
+        for b in self.dbg_btns:
+            row3.Add(b, 0, wx.RIGHT, 6)
+        v.Add(row3, 0, wx.ALL, 10)
+        self.SetSizer(v)
+
+        self.btn_switch.Bind(wx.EVT_BUTTON, self.on_switch)
+        self.btn_reload.Bind(wx.EVT_BUTTON, lambda e: self.frame.send_cmd({'cmd': 'profile_reload'}))
+        self.btn_show.Bind(wx.EVT_BUTTON, lambda e: self.frame.send_cmd({'cmd': 'console', 'show': True}))
+        self.btn_hide.Bind(wx.EVT_BUTTON, lambda e: self.frame.send_cmd({'cmd': 'console', 'show': False}))
+        for b in self.dbg_btns:
+            b.Bind(wx.EVT_BUTTON, self.on_debug)
+        self.update_status(None)
+
+    def update_status(self, st):
+        """status (動いていれば dict、止まっていれば None) を画面に反映する。1 秒ごとに呼ばれる。"""
+        running = st is not None
+        for c in self.ctrls:
+            try:
+                c.Enable(running)
+            except Exception:
+                pass
+        if not running:
+            self.info.SetLabel('コクピットは止まっています (ボタンは使えません)')
+            return
+        self.info.SetLabel(cockpit_summary(st))
+        profiles = st.get('profiles')
+        profiles = [str(p) for p in profiles] if isinstance(profiles, list) else []
+        cur = st.get('profile_file')
+        if profiles != self.shown_profiles or cur != self.shown_file:
+            # 一覧か今のプロファイルが変わったときだけ選び直す (選んでいる最中の選択を壊さない)
+            self.shown_profiles = profiles
+            self.shown_file = cur
+            self.ch.Clear()
+            for p in profiles:
+                self.ch.Append(p)
+            if cur in profiles:
+                self.ch.SetSelection(profiles.index(cur))
+
+    def on_switch(self, event):
+        i = self.ch.GetSelection()
+        if i == wx.NOT_FOUND:
+            self.frame.set_status('切り替えるプロファイルを選んでください')
+            return
+        self.frame.send_cmd({'cmd': 'profile_load', 'file': self.ch.GetString(i)})
+
+    def on_debug(self, event):
+        self.frame.send_cmd({'cmd': 'debug', 'name': event.GetEventObject().dbg_name})
+
+
+def cockpit_summary(st):
+    """状態の 1 行 (窓の上の帯と、コクピットのタブで使う)。st が None なら止まっている。"""
+    if st is None:
+        return 'コクピット: 止まっている'
+    name = st.get('profile_name')
+    fname = st.get('profile_file')
+    text = 'コクピット: 動作中 v{} / プロファイル: {} ({})'.format(
+        st.get('app_version', '?'), name if name else '-', fname if fname else 'ファイルなし')
+    if st.get('config_mode'):
+        text += ' / コンフィグ中'
+    return text
+
+
+class CloseChoiceDialog(wx.Dialog):
+    """閉じるときの 3 択。choice = 'quit' / 'close' / 'cancel'。"""
+
+    def __init__(self, parent):
+        wx.Dialog.__init__(self, parent, title='閉じる')
+        self.choice = 'cancel'
+        v = wx.BoxSizer(wx.VERTICAL)
+        v.Add(wx.StaticText(self, label='コクピットが動いています。どうしますか?'), 0, wx.ALL, 14)
+        h = wx.BoxSizer(wx.HORIZONTAL)
+        for key, text in (('quit', 'コクピットも終了する'), ('close', 'この窓だけ閉じる'), ('cancel', 'キャンセル')):
+            b = wx.Button(self, label=text)
+            b.choice_key = key
+            b.Bind(wx.EVT_BUTTON, self.on_btn)
+            h.Add(b, 0, wx.RIGHT, 8)
+            if key == 'cancel':
+                b.SetDefault()
+        v.Add(h, 0, wx.ALL, 14)
+        v.Add(_gray(wx.StaticText(self, label='「この窓だけ閉じる」を選ぶと、本体は黒いコンソール窓をまた出します。')), 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 14)
+        self.SetSizerAndFit(v)
+        self.CentreOnParent()
+
+    def on_btn(self, event):
+        self.choice = event.GetEventObject().choice_key
+        self.EndModal(wx.ID_OK if self.choice != 'cancel' else wx.ID_CANCEL)
+
+
+def ask_close_choice(parent):
+    dlg = CloseChoiceDialog(parent)
+    try:
+        dlg.ShowModal()
+        return dlg.choice       # X で閉じたときは 'cancel' のまま
+    finally:
+        dlg.Destroy()
 
 
 # ------------------------------------------------------------------------------
@@ -1208,6 +1456,7 @@ class PanelTab(wx.Panel):
         self.rebuilding = False
         self.node_of = {}
         self.brake_rows = []
+        self.left_fname = None     # 左の見本に出している階層 (右を選んでいる間も覚えておく)
         self._build()
 
     # ---- 画面の組み立て ----
@@ -1236,10 +1485,14 @@ class PanelTab(wx.Panel):
         fv.Add(self.box_slot, 0, wx.EXPAND | wx.ALL, 4)
         self.form.SetSizer(fv)
 
-        self.preview = PreviewPanel(self)
+        self.preview_l = PreviewPanel(self)
+        self.preview_r = PreviewPanel(self)
+        pair = wx.BoxSizer(wx.HORIZONTAL)
+        pair.Add(self.preview_l, 0, wx.RIGHT, 6)
+        pair.Add(self.preview_r, 0)
         right = wx.BoxSizer(wx.VERTICAL)
-        right.Add(self.preview, 0)
-        right.Add(_gray(wx.StaticText(self, label='見本: 1 番が上、時計回り。\n灰 = NONE/REST、赤紫 = 書いていない番号、\n緑 = 戻る')), 0, wx.TOP, 6)
+        right.Add(pair, 0)
+        right.Add(_gray(wx.StaticText(self, label='見本: 左パネル (今の階層) と右パネルを並べて出します。1 番が上、時計回り。\n黄色の縁 = 編集中の項目、灰 = NONE/REST、赤紫 = 書いていない番号、緑 = 戻る')), 0, wx.TOP, 6)
 
         top = wx.BoxSizer(wx.HORIZONTAL)
         top.Add(left, 0, wx.EXPAND | wx.ALL, 6)
@@ -1896,14 +2149,31 @@ class PanelTab(wx.Panel):
         self.refresh_validation()
 
     def refresh_preview(self):
+        """左右 2 つの見本を作り直す。左 = 今の階層 (右を選んでいる間は最後に見た左の階層。無ければルート)。"""
         key = self.cur
         data = self.model.data
-        if key is None:
-            side, fname = 'left', panel_root_name(data)
-        else:
+        root = panel_root_name(data)
+        if key is not None:
             side, fname = self._context()
-        caption = ('左 ' + fname) if side == 'left' else '右'
-        self.preview.set_level(level_entries(data, side, fname), caption)
+            if side == 'left':
+                self.left_fname = fname
+        folders = get_folders(data)
+        if self.left_fname is None or not folders or self.left_fname not in folders:
+            self.left_fname = root
+        lname = self.left_fname
+        hl_l = hl_r = None
+        if key is not None and key[0] == 'slot':
+            try:
+                idx = int(key[3]) - 1
+            except Exception:
+                idx = None
+            if idx is not None and idx >= 0:
+                if key[1] == 'left' and key[2] == lname:
+                    hl_l = idx
+                elif key[1] == 'right':
+                    hl_r = idx
+        self.preview_l.set_level(level_entries(data, 'left', lname), '左 ' + lname, hl_l)
+        self.preview_r.set_level(level_entries(data, 'right', 'items'), '右 items', hl_r)
 
     def refresh_validation(self):
         problems = validate_panels(self.model.data)
@@ -1923,14 +2193,20 @@ class PanelTab(wx.Panel):
 # 窓
 # ==============================================================================
 class MainFrame(wx.Frame):
-    def __init__(self, first_profile=None, log_path=None):
+    def __init__(self, first_profile=None, log_path=None, status_path=None, cmd_path=None, alive_path=None):
         wx.Frame.__init__(self, None, title='VC コンソール  v{}'.format(VC_GUI_VERSION), size=WINDOW_SIZE)
+        self.status_path = status_path or STATUS_PATH
+        self.cmd_path = cmd_path or CMD_PATH
+        self.alive_path = alive_path or ALIVE_PATH
+        self.cockpit_status = None      # 最後に読んだ状態 (止まっていれば None)
         self.model = ProfileModel()
         self.profile_paths = []
         self.CreateStatusBar()
         self.SetMinSize((900, 600))
 
         root = wx.Panel(self)
+        # コクピットの状態の帯 (どのタブでも出す)
+        self.head_st = _bold(wx.StaticText(root, label=cockpit_summary(None)))
         # プロファイルの選び (タブ 3 と 4 だけに出す)
         self.bar = wx.Panel(root)
         bh = wx.BoxSizer(wx.HORIZONTAL)
@@ -1947,16 +2223,19 @@ class MainFrame(wx.Frame):
         self.bar.SetSizer(bh)
 
         self.nb = wx.Notebook(root)
+        self.cockpit_tab = CockpitTab(self.nb, self)
         self.log_tab = LogTab(self.nb, self, log_path)
         self.config_tab = ConfigTab(self.nb, self)
         self.settings_tab = SettingsTab(self.nb, self)
         self.panel_tab = PanelTab(self.nb, self)
+        self.nb.AddPage(self.cockpit_tab, 'コクピット')
         self.nb.AddPage(self.log_tab, 'ログ')
         self.nb.AddPage(self.config_tab, '設定')
         self.nb.AddPage(self.settings_tab, 'プロファイル')
         self.nb.AddPage(self.panel_tab, 'パネル')
 
         v = wx.BoxSizer(wx.VERTICAL)
+        v.Add(self.head_st, 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
         v.Add(self.bar, 0, wx.ALL, 6)
         v.Add(self.nb, 1, wx.EXPAND)
         root.SetSizer(v)
@@ -1973,6 +2252,12 @@ class MainFrame(wx.Frame):
         self.bar.Show(False)
         root.Layout()
 
+        # 1 秒ごとに、生存の印を書き、本体の状態を読む
+        self.tick_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.on_tick, self.tick_timer)
+        self.on_tick(None)
+        self.tick_timer.Start(TICK_MS)
+
     # ---- 共通 ----
     def set_status(self, text):
         try:
@@ -1988,8 +2273,44 @@ class MainFrame(wx.Frame):
         self.dirty_st.SetLabel('* 保存していない変更があります' if self.model.dirty else '')
         self.bar.Layout()
 
+    def on_tick(self, event):
+        """1 秒ごと: 生存の印を書く → 状態を読んで帯とコクピットのタブに出す。"""
+        if not write_alive(self.alive_path):
+            self.set_status('生存の印を書けません: {}'.format(self.alive_path))
+        try:
+            st = read_cockpit_status(self.status_path)
+            self.cockpit_status = st
+            text = cockpit_summary(st)
+            if self.head_st.GetLabel() != text:
+                self.head_st.SetLabel(text)
+                self.head_st.SetForegroundColour(wx.Colour(*(GREEN if st else GRAY)))
+                self.head_st.GetParent().Layout()
+            self.cockpit_tab.update_status(st)
+        except Exception as e:
+            self.set_status('状態を表示できません: {}'.format(e))
+
+    def send_cmd(self, obj):
+        """コクピットへ命令を 1 行足す。結果を状態バーに出す。"""
+        ok, msg = send_cockpit_cmd(self.cmd_path, obj)
+        self.set_status(msg)
+        return ok
+
+    def auto_reload_if_current(self, path):
+        """保存したファイルがコクピットの今のプロファイルなら、profile_reload を送る。"""
+        try:
+            st = self.cockpit_status
+            if st is None or not same_profile_file(path, st.get('profile_file')):
+                return
+            if self.send_cmd({'cmd': 'profile_reload'}):
+                msg = '保存したのでコクピットに profile_reload を送りました: {}'.format(os.path.basename(path))
+                self.set_status(msg)
+                self.log_tab.add_note(msg)
+        except Exception as e:
+            self.set_status('自動の読み直しに失敗: {}'.format(e))
+
     def on_page(self, event):
-        self.bar.Show(self.nb.GetSelection() >= 2)
+        page = self.nb.GetCurrentPage()
+        self.bar.Show(page is self.settings_tab or page is self.panel_tab)
         self.bar.GetParent().Layout()
         event.Skip()
 
@@ -2058,6 +2379,8 @@ class MainFrame(wx.Frame):
         ok, msg = self.model.save()
         self.set_status(msg)
         self.update_dirty_label()
+        if ok:
+            self.auto_reload_if_current(self.model.path)
 
     def on_save_as(self, event):
         dlg = wx.FileDialog(self, '別名で保存', defaultDir=PROFILE_DIR, defaultFile=os.path.basename(self.model.path or 'new_profile.json'),
@@ -2072,6 +2395,7 @@ class MainFrame(wx.Frame):
         self.set_status(msg)
         if ok:
             self.fill_profile_choice()
+            self.auto_reload_if_current(self.model.path)
         self.update_dirty_label()
 
     def on_close(self, event):
@@ -2079,34 +2403,49 @@ class MainFrame(wx.Frame):
             if wx.MessageBox('保存していない変更があります。捨てて閉じますか?', '確認', wx.YES_NO | wx.ICON_QUESTION) != wx.YES:
                 event.Veto()
                 return
+        try:
+            if event.CanVeto():
+                # 窓を閉じる前に、コクピットが動いていれば 3 択で聞く (今の状態を読み直して決める)
+                if read_cockpit_status(self.status_path) is not None:
+                    choice = ask_close_choice(self)
+                    if choice == 'cancel':
+                        event.Veto()
+                        return
+                    if choice == 'quit':
+                        self.send_cmd({'cmd': 'quit'})
+        except Exception as e:
+            self.set_status('閉じる前の確認に失敗: {}'.format(e))
+        try:
+            self.tick_timer.Stop()
+        except Exception:
+            pass
         self.log_tab.stop()
+        clear_alive(self.alive_path)
         event.Skip()
 
 
 def parse_args(argv):
-    """コマンドラインを読む。返り値 = (プロファイル名か None, ログのパスか None)。知らない引数は無視する。"""
-    profile = None
-    log = None
-    i = 1
-    while i < len(argv):
-        a = argv[i]
-        if a == '--log' and i + 1 < len(argv):
-            log = argv[i + 1]
-            i += 2
-        elif a == '--profile' and i + 1 < len(argv):
-            profile = argv[i + 1]
-            i += 2
-        elif not a.startswith('--') and profile is None:
-            profile = a
-            i += 1
-        else:
-            i += 1
-    return profile, log
+    """コマンドラインを読む。返り値 = argparse の Namespace (profile, log, status, cmd, alive)。知らない引数は無視する。"""
+    import argparse
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument('--profile', default=None)
+    ap.add_argument('--log', default=None)
+    ap.add_argument('--status', default=STATUS_PATH)
+    ap.add_argument('--cmd', default=CMD_PATH)
+    ap.add_argument('--alive', default=ALIVE_PATH)
+    ap.add_argument('profile_pos', nargs='?', default=None)     # 古い書き方: ファイル名だけ
+    try:
+        ns, _unknown = ap.parse_known_args(list(argv[1:]))
+    except SystemExit:
+        ns = ap.parse_args([])      # 引数が壊れていたときは既定で起動する
+    if ns.profile is None:
+        ns.profile = ns.profile_pos
+    return ns
 
 
 def run(argv=None):
     argv = sys.argv if argv is None else argv
-    profile, log = parse_args(argv)
+    args = parse_args(argv)
     app = wx.App(False)
     checker = None
     try:
@@ -2115,7 +2454,8 @@ def run(argv=None):
             return      # もう動いている。何も言わずに終わる
     except Exception:
         checker = None  # 調べられないときは、そのまま起動する
-    frame = MainFrame(first_profile=profile, log_path=log)
+    frame = MainFrame(first_profile=args.profile, log_path=args.log, status_path=args.status,
+                      cmd_path=args.cmd, alive_path=args.alive)
     frame.Show(True)
     app.MainLoop()
     del checker
