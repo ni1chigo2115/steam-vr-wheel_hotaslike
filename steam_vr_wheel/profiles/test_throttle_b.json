@@ -4,7 +4,7 @@
   "profile": {
     "id": "test_throttle_b",
     "name": "テスト: スロットル B モード (パネルは test_panels と同じ)",
-    "note": "test_panels.json と同じパネルで、throttle.mode を B にしたもの (0.1.42)。レバーの 50% より前 = アクセル (SL0)、後ろ = ブレーキ (SL1)。BRAKE の項目のブレーキも SL1 に出す (レバーのブレーキと大きい方)。ニュートラルに止めたいときはセンタークルーズ (CRUISE へ 2 回倒してからダブルクリック)。警告 2 行はわざと"
+    "note": "test_panels.json と同じパネルで、throttle.mode を B にしたもの (0.1.42)。レバーの 50% より前 = アクセル (SL0)、後ろ = ブレーキ (SL1)。BRAKE の項目のブレーキも SL1 に出す (レバーのブレーキと大きい方)。ニュートラルに止めたいときはセンタークルーズ (CRUISE へ 2 回倒してからダブルクリック)。警告 2 行はわざと。0.1.44: パネルのボタンをパッドの割り当て (1〜32) の後ろに移した (右 = 32 + スロット、左 = 40 + スロット。BRAKE BTN の 28 はそのまま)。vJoy のボタンの数は 46 以上が要る"
   },
   "settings": {"throttle.mode": "B", "throttle.b_center_neutral": true},
   "input": {
@@ -21,12 +21,12 @@
       "folders": {
         "main": {
           "0": {"label": "無効 (警告して捨てる)"},
-          "1": {"label": "SELECT", "command": "vjoy_button", "args": {"button": 20}},
-          "2": {"label": "PAUSE", "command": "vjoy_button", "args": {"button": 21}},
+          "1": {"label": "SELECT", "command": "vjoy_button", "args": {"button": 41}},
+          "2": {"label": "PAUSE", "command": "vjoy_button", "args": {"button": 42}},
           "3": {"label": "BRAKE", "command": "brake"},
-          "4": {"label": "FLARE", "command": "vjoy_button", "args": {"button": 29}},
+          "4": {"label": "FLARE", "command": "vjoy_button", "args": {"button": 44}},
           "5": {"label": "CRUISE", "command": "cruise"},
-          "6": {"label": "MNVR", "command": "vjoy_button", "args": {"button": 23}, "hud": "mnvr"},
+          "6": {"label": "MNVR", "command": "vjoy_button", "args": {"button": 46}, "hud": "mnvr"},
           "7": {"label": "CONFIG", "command": "config"},
           "8": {"label": "MORE", "folder": "more"}
         },
@@ -40,13 +40,13 @@
     },
     "right_game": {
       "items": {
-        "1": {"label": "MISSILE", "command": "vjoy_button", "args": {"button": 19}},
-        "2": {"label": "SPT1", "command": "vjoy_button", "args": {"button": 24}},
-        "3": {"label": "SPT2", "command": "vjoy_button", "args": {"button": 25}},
+        "1": {"label": "MISSILE", "command": "vjoy_button", "args": {"button": 33}},
+        "2": {"label": "SPT1", "command": "vjoy_button", "args": {"button": 34}},
+        "3": {"label": "SPT2", "command": "vjoy_button", "args": {"button": 35}},
         "4": {"label": "REST", "type": "REST"},
-        "5": {"label": "GEAR", "exec": "trigger", "block_a": true, "command": "vjoy_button", "args": {"button": 22}},
-        "6": {"label": "TGT", "command": "vjoy_button", "args": {"button": 26}, "latch": false},
-        "7": {"label": "RADAR", "command": "vjoy_button", "args": {"button": 27}}
+        "5": {"label": "GEAR", "exec": "trigger", "block_a": true, "command": "vjoy_button", "args": {"button": 37}},
+        "6": {"label": "TGT", "command": "vjoy_button", "args": {"button": 38}, "latch": false},
+        "7": {"label": "RADAR", "command": "vjoy_button", "args": {"button": 39}}
       }
     }
   }

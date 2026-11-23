@@ -4,7 +4,7 @@
   "profile": {
     "id": "ac7",
     "name": "AC7 (実戦用)",
-    "note": "test_panels を元にした実戦用の並び (テスト用のわざとの警告は外した)。ゲームの側で vJoy のボタンを次の項目に割り当てる (AC7 の Input.ini の名前): 9 = Gun (右トリガーの引き切り)、19 = SelectMissiles、24 = SelectSpecialWeapon1、25 = SelectSpecialWeapon2 (この 3 つは hotasmod の項目。あるかは要検証)、30 = Weapon (兵装の切り替え。ゲームの元からある項目)、22 = Gear、26 = Target、27 = Radar、29 = Flare、20 = View、21 = Pause、23 = MNVR (AC7 に無ければ空き)。スロットルは vJoy の RZ を Throttle に。"
+    "note": "test_panels を元にした実戦用の並び (テスト用のわざとの警告は外した)。パネルのボタンはパッドの割り当て (1〜32) の後ろ: 右パネル = 32 + スロットの番号、左パネル = 40 + スロットの番号。ゲームの側で vJoy のボタンを次の項目に割り当てる (AC7 の Input.ini の名前): 9 = Gun (右トリガーの引き切り)、33 = SelectMissiles、34 = SelectSpecialWeapon1、35 = SelectSpecialWeapon2 (この 3 つは hotasmod の項目。あるかは要検証)、36 = Weapon (兵装の切り替え)、37 = Gear、38 = Target、39 = Radar、41 = View、42 = Pause、44 = Flare、46 = MNVR (AC7 に無ければ空き)。vJoy の設定でボタンの数を 46 以上にしておくこと。スロットルは vJoy の RZ を Throttle に。"
   },
   "settings": {},
   "input": {
@@ -42,14 +42,14 @@
             "label": "VIEW",
             "command": "vjoy_button",
             "args": {
-              "button": 20
+              "button": 41
             }
           },
           "2": {
             "label": "PAUSE",
             "command": "vjoy_button",
             "args": {
-              "button": 21
+              "button": 42
             }
           },
           "3": {
@@ -60,7 +60,7 @@
             "label": "FLARE",
             "command": "vjoy_button",
             "args": {
-              "button": 29
+              "button": 44
             }
           },
           "5": {
@@ -71,7 +71,7 @@
             "label": "MNVR",
             "command": "vjoy_button",
             "args": {
-              "button": 23
+              "button": 46
             },
             "hud": "mnvr"
           },
@@ -108,28 +108,28 @@
           "label": "MISSILE",
           "command": "vjoy_button",
           "args": {
-            "button": 19
+            "button": 33
           }
         },
         "2": {
           "label": "SPT1",
           "command": "vjoy_button",
           "args": {
-            "button": 24
+            "button": 34
           }
         },
         "3": {
           "label": "SPT2",
           "command": "vjoy_button",
           "args": {
-            "button": 25
+            "button": 35
           }
         },
         "4": {
           "label": "WPN",
           "command": "vjoy_button",
           "args": {
-            "button": 30
+            "button": 36
           }
         },
         "5": {
@@ -138,14 +138,14 @@
           "block_a": true,
           "command": "vjoy_button",
           "args": {
-            "button": 22
+            "button": 37
           }
         },
         "6": {
           "label": "TGT",
           "command": "vjoy_button",
           "args": {
-            "button": 26
+            "button": 38
           },
           "latch": false
         },
@@ -153,7 +153,7 @@
           "label": "RADAR",
           "command": "vjoy_button",
           "args": {
-            "button": 27
+            "button": 39
           }
         }
       }
