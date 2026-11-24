@@ -172,6 +172,15 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
         スティックの押し込みの区画ボタンの番号を args の "buttons" で変えられる。ボタンの番号を確かめる [BTN] のログ (LOG ▸ BTN LOG)。
     (6) 十字キーは既定で POV だけ (十字キーモードでないときのボタン 19〜22 は出さない)。プロファイルの 'dpad.buttons' でボタンも出せる。
     (7) VC コンソールの生存の印を 1〜2 回読めなくても、コンソールの窓を出さない (点滅の直し)。
+  0.1.46: 操作系のひとくくりの最後 (2026-11-24)。
+    (1) パネルの文字にパッドのボタンの印。ラベルに {A} / {LB} / {btn:A} と書く (案 1) か、項目の vJoy のボタン番号から自動 (案 2)。
+        自動の対応は 'panel.glyph_map' (既定 = DirectInput の Xbox の並び 1=A … 10=RS)、出す側は 'panel.glyph_side' (left / right / off)。
+        項目の "glyph": false で出さない、"glyph": "LB" で決めて出す。十字キーの印は出さない。
+    (2) input.unbind は「既定の割り当て」だけを外す。プロファイルの input.bindings に書いた行は外さない
+        (unbind ["right.a"] + bindings の right.a の行 = A ボタンの出力を差し替え)。0.1.45 までは書いた行も一緒に消えていた。
+    (3) HUD のデバッグ用の段 (トリガーの区間・パネルの階層・フォントの確かめ・DPAD の数値) と [DPAD] のログを既定で出さない。
+        段の場所は今までどおり取るので、窓の大きさ・十字・パネルの置き場所は変わらない。HUD_DEBUG_ROWS / コマンド 'hud_debug_rows'
+        (コンフィグの LOG ▸ HUD DBG) で出す。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -275,7 +284,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.45'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.46'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -550,9 +559,9 @@ def hud_rows_font_test():
 
 # --- Q29-3 調査用: スティックと VirtualDPad の数値の段 (デバッグ版だけ) ---------------------
 # 'text_fn' は values['dbg'] (Joystick._dpad_debug_values が作る辞書) を読む。Hornet は < > | # [ ] と小文字が無いので使わない。
-DPAD_DEBUG_HUD = True                      # [CONFIG] 起動時に数値の段を出すか (P キーで出す / 隠す)
+DPAD_DEBUG_HUD = False                     # [CONFIG] 起動時に数値の段を出すか (P キー / コンフィグの DEBUG ▸ DPAD で出す / 隠す)。0.1.46 から既定は出さない
 DPAD_DEBUG_HUD_HZ = 20.0                   # [CONFIG] 段の数字を書き換える回数 [回/秒]。多いほど細かいが HUD の描き直しが増える
-DPAD_DEBUG_LOG = True                      # [CONFIG] VirtualDPad の方向が変わるたびに [DPAD] の1行をログ (コンソール + HUD) に出す
+DPAD_DEBUG_LOG = False                     # [CONFIG] VirtualDPad の方向が変わるたびに [DPAD] の1行をログ (コンソール + HUD) に出す (O キー / コマンド 'dpad_log')。0.1.46 から既定は出さない
 _DPAD_DIR_NAMES = {5: 'N', 8: 'U', 9: 'UR', 6: 'R', 3: 'DR', 2: 'D', 1: 'DL', 4: 'L', 7: 'UL'}
 
 
@@ -660,7 +669,10 @@ def hud_row_config():
             'parts': [{'text_fn': hud_text_config, 'reserve': 'CONFIG BRAKE SMOOTH 0.00S', 'align': 'left'}]}
 
 
-HUD_FONT_TEST = True                       # [CONFIG] フォント確認用の段を出す (確認が終わったら False)
+HUD_FONT_TEST = True                       # [CONFIG] フォント確認用の段を HUD に置く (場所を取る)。0.1.46: 出すかは HUD_DEBUG_ROWS。
+                                           #   False にすると段が無くなり、窓が縮んで十字とパネルの位置が動くので注意
+HUD_DEBUG_ROWS = False                     # [CONFIG] (0.1.46) デバッグ用の段 (トリガーの区間 dbg_trg・パネルの階層 dbg_pnl・フォントの確かめ) を出す。
+                                           #   出さないときも段の場所は取る (窓の大きさを変えない)。コマンド 'hud_debug_rows' / コンフィグの LOG ▸ HUD DBG で切り替え
 HUD_NOTICE_ROWS = [                        # [CONFIG] 上から並べる順番
     hud_row_bmark(),
     hud_row_cruise(),
@@ -910,6 +922,21 @@ HUD_BUTTON_GLYPHS = {                      # [CONFIG]
     'DPAD_UL': u'\x51', 'DPAD_UR': u'\x45', 'DPAD_DL': u'\x5a', 'DPAD_DR': u'\x43',
 }
 
+HUD_GLYPH_TOKEN_RE = r'(\{[Bb][Tt][Nn]:[^}]*\}|\{[A-Za-z_]+\})'   # (0.1.46) 印の書き方: {btn:A} (前から) と {A} (短い書き方)
+
+
+def hud_glyph_token_name(part):
+    """(0.1.46) '{btn:A}' / '{A}' なら印の名前 ('A'、大文字にする)、印の書き方でなければ None。
+    短い書き方 {A} は HUD_BUTTON_GLYPHS にある名前だけを印とみなす (知らない {FOO} は普通の文字)。"""
+    m = re.match(r'^\{[Bb][Tt][Nn]:([^}]*)\}$', part)
+    if m:
+        return m.group(1).strip().upper()
+    m = re.match(r'^\{([A-Za-z_]+)\}$', part)
+    if m and m.group(1).upper() in HUD_BUTTON_GLYPHS:
+        return m.group(1).upper()
+    return None
+
+
 # HUD に出す文字。pos = 固まりの中心からの (右, 上) メートル、文字の中心がそこに来る。
 # 例:
 # HUD_TEXT_ITEMS = [
@@ -984,18 +1011,20 @@ class HudFonts:
         base_font = self.get(item.get('font', HUD_TEXT_FONT), size)
         btn_font = self.get('gamepad', size * item.get('btn_scale', 1.0))
         runs = []
-        for part in re.split(r'(\{btn:[^}]*\})', str(item.get('text', ''))):
+        for part in re.split(HUD_GLYPH_TOKEN_RE, str(item.get('text', ''))):
             if not part:
                 continue
-            m = re.match(r'^\{btn:([^}]*)\}$', part)
-            if m:
-                glyph = HUD_BUTTON_GLYPHS.get(m.group(1))
-                if glyph:
-                    runs.append((glyph, btn_font))
-                else:
-                    runs.append(('[' + m.group(1) + ']', base_font))
-            else:
+            name = hud_glyph_token_name(part)
+            if name is None:
                 runs.append((part, base_font))
+                continue
+            glyph = HUD_BUTTON_GLYPHS.get(name)
+            if glyph:
+                runs.append((glyph, btn_font))
+            elif part[:5].lower() == '{btn:':
+                runs.append(('[' + name + ']', base_font))
+            else:
+                runs.append((part, base_font))          # 0.1.46: {名前} の短い書き方で、知らない名前はそのままの文字
         return runs
 
     def render(self, item):
@@ -6176,18 +6205,18 @@ def load_input_profile(path):
     elif base != 'none':
         print("[Input] Warning: input.base = {!r} は知らない値です。'default' として読みます".format(base))
         bindings = default_input_bindings(settings.get('input.trigger_button_from'))
+    unbind = inp.get('unbind') or []                     # 0.1.38
+    if unbind:                                           # 0.1.46: 外すのは既定の割り当てだけ (下で足すプロファイルの行は外さない)
+        drop = set(input_alias(str(n)) for n in unbind)
+        before = len(bindings)
+        bindings = [b for b in bindings if b[0] not in drop]
+        print("[Input] {}: input.unbind で既定の割り当てを {} 行外しました ({})".format(
+            os.path.basename(path), before - len(bindings), ', '.join(sorted(drop))))
     for i, row in enumerate(inp.get('bindings') or []):
         try:
             bindings.append((input_alias(str(row['input'])), str(row['command']), dict(row.get('args') or {})))
         except Exception as e:
             print("[Input] Warning: {} の input.bindings の {} 行目を読めません: {}".format(os.path.basename(path), i + 1, e))
-    unbind = inp.get('unbind') or []                     # 0.1.38
-    if unbind:
-        drop = set(input_alias(str(n)) for n in unbind)
-        before = len(bindings)
-        bindings = [b for b in bindings if b[0] not in drop]
-        print("[Input] {}: input.unbind で {} 行の割り当てを外しました ({})".format(
-            os.path.basename(path), before - len(bindings), ', '.join(sorted(drop))))
     base_settings = dict(settings)
     over = load_user_settings(path)                       # 0.1.43: コンフィグメニューで変えた値 (users/profiles/<名前>.json)
     if over:
@@ -6487,6 +6516,14 @@ def build_panel_states(profile):
         out['left_game'] = PanelState('left_game', defs['left_game'])
     if defs.get('right_game'):
         out['right_game'] = PanelState('right_game', defs['right_game'])
+    if out:
+        try:                                             # 0.1.46: パッドの印 (draw_panel_image が見る)
+            side, gmap = read_panel_glyph_settings((profile or {}).get('settings'))
+        except Exception as e:
+            print("[Panel] Warning: パッドの印の設定を読めません: {}".format(e))
+            side, gmap = 'off', {}
+        for ps in out.values():
+            ps.glyph_side, ps.glyph_map = side, gmap
     return out
 
 
@@ -7742,6 +7779,7 @@ def config_menu_folders(profiles, has_prev):
             '4': {'label': 'VERSION', 'act': 'cmd', 'cmd': 'version'},
             '5': {'label': 'KEYS', 'cfg': 'debug.keys'},          # 0.1.45
             '6': {'label': 'BTN LOG', 'act': 'cmd', 'cmd': 'button_log'},
+            '7': {'label': 'HUD DBG', 'act': 'cmd', 'cmd': 'hud_debug_rows'},   # 0.1.46
         },
         'debug': {
             '2': {'label': 'STATS', 'act': 'cmd', 'cmd': 'hud_stats'},
@@ -8094,6 +8132,71 @@ PANEL_COLOR_SELECT = (130, 255, 180, 70)   # [CONFIG] (0.1.36) 選んでいる�
 POV_MODE_NEEDS_EXTRA_TOUCH = True          # [CONFIG] (0.1.40) 十字キーモードに入るのは「左スティックのタッチ + POV_MODE_EXTRA_TOUCH_IDS (Y) のタッチ」のときだけ。False = 0.1.39 までと同じ (スティックのタッチかアプリメニューだけで入る)
 POV_MODE_EXTRA_TOUCH_IDS = [1]             # [CONFIG] (0.1.40) 一緒に触れているボタンの番号 (openvr の EVRButtonId)。0.1.41: 1 = k_EButton_ApplicationMenu = 左 Y ボタン (実機で確かめた。7 = X)
 PANEL_HIDE_RIGHT_IN_POV = False            # [CONFIG] (0.1.36) 十字キーモードの間、右パネルを隠す (0.1.40: 既定は隠さない。にいちごさんの決定)
+PANEL_GLYPH_SIDE = 'left'                  # [CONFIG] (0.1.46) 項目のボタン番号から自動で出すパッドの印を、ラベルの 'left' (左) / 'right' (右) に出す。
+                                           #   'off' = 自動では出さない (ラベルに書いた {A} と、項目の "glyph" に書いた印だけ)。プロファイルの 'panel.glyph_side' が優先
+PANEL_GLYPH_MAP = {                        # [CONFIG] (0.1.46) vJoy のボタン番号 → パッドの印の名前 (HUD_BUTTON_GLYPHS)。プロファイルの 'panel.glyph_map' が優先 (全部を置き換える)
+    '1': 'A', '2': 'B', '3': 'X', '4': 'Y', '5': 'LB', '6': 'RB',   #   既定は DirectInput の Xbox のパッドの並び
+    '7': 'VIEW', '8': 'MENU', '9': 'LS', '10': 'RS',                #   (作業資料室/パッド_DirectInputのボタン番号_XboxOne.jpg)
+}
+PANEL_GLYPH_GAP = 0.25                     # [CONFIG] (0.1.46) 印とラベルの間 (文字の大きさに対する割合)
+
+
+def read_panel_glyph_settings(settings):
+    """(0.1.46) プロファイルの settings から (印を出す側, {番号の文字: 印の名前}) を読む。おかしい値は警告して既定。
+    十字キーの印 (DPAD*) は今は出さない (ユーザーの決定 2026-11-23)。"""
+    settings = settings or {}
+    side = settings.get('panel.glyph_side', PANEL_GLYPH_SIDE)
+    if side not in ('left', 'right', 'off'):
+        print("[Panel] Warning: 'panel.glyph_side' は left / right / off のどれか (今の値 {!r})。{!r} を使います".format(side, PANEL_GLYPH_SIDE))
+        side = PANEL_GLYPH_SIDE
+    raw = settings.get('panel.glyph_map', PANEL_GLYPH_MAP)
+    if not isinstance(raw, dict):
+        print("[Panel] Warning: 'panel.glyph_map' は {\"番号\": \"印の名前\"} の形で書いてください。既定を使います")
+        raw = PANEL_GLYPH_MAP
+    gmap = {}
+    for k, v in raw.items():
+        name = str(v).strip().upper()
+        if name not in HUD_BUTTON_GLYPHS or name.startswith('DPAD'):
+            print("[Panel] Warning: 'panel.glyph_map' の {} の印 {!r} は使えません。捨てます".format(k, v))
+            continue
+        try:
+            gmap[str(int(k))] = name
+        except (TypeError, ValueError):
+            print("[Panel] Warning: 'panel.glyph_map' の番号 {!r} は数ではありません。捨てます".format(k))
+    return side, gmap
+
+
+def panel_label_glyph(ps, row):
+    """(0.1.46) 項目のラベルに足すパッドの印の名前 (無ければ None)。
+    項目の "glyph": false = 出さない / "LB" などの名前 = それを出す / 書いていない = ボタン番号から自動 (panel.glyph_map)。
+    ラベルにもう {A} などの印が書いてあれば、自動では足さない。"""
+    g = row.get('glyph')
+    if g is False:
+        return None
+    if isinstance(g, str) and g.strip():
+        name = g.strip().upper()
+        return name if (name in HUD_BUTTON_GLYPHS and not name.startswith('DPAD')) else None
+    side = getattr(ps, 'glyph_side', 'off')
+    if side == 'off' or row.get('command') != 'vjoy_button':
+        return None
+    label = str(row.get('label', ''))
+    if any(hud_glyph_token_name(p) for p in re.split(HUD_GLYPH_TOKEN_RE, label) if p):
+        return None
+    try:
+        num = str(int((row.get('args') or {}).get('button')))
+    except (TypeError, ValueError):
+        return None
+    return (getattr(ps, 'glyph_map', None) or {}).get(num)
+
+
+def _panel_run_box(font, text):
+    """(0.1.46) 文字の (送り幅, 上, 下) [px]。描く原点からの値 (印のフォントと文字のフォントで高さをそろえるため)。"""
+    try:
+        b = font.getbbox(text)
+        return b[2], b[1], b[3]
+    except AttributeError:
+        w, h = font.getsize(text)
+        return w, 0, h
 
 
 def _panel_text_size(font, text):
@@ -8112,6 +8215,19 @@ def _panel_ring(c, r, a0, a1, steps):
         a = math.radians(a0 + (a1 - a0) * k / float(steps))
         pts.append((c + r * math.sin(a), c - r * math.cos(a)))
     return pts
+
+
+def _panel_label_runs(fonts, text, fs):
+    """(0.1.46) ラベルを (文字, フォント, 送り幅) の並びにし、全体の幅・上・下 [px] も返す。{btn:A} / {A} はパッドのフォント。"""
+    out = []
+    w, top, bot = 0.0, None, None
+    for t, f in fonts._runs({'text': text, 'size': fs, 'font': HUD_TEXT_FONT}):
+        adv, t0, t1 = _panel_run_box(f, t)
+        out.append((t, f, adv))
+        w += adv
+        top = t0 if top is None else min(top, t0)
+        bot = t1 if bot is None else max(bot, t1)
+    return out, w, (top or 0), (bot or 0)
 
 
 def draw_panel_image(ps, fonts, size=None):
@@ -8155,14 +8271,18 @@ def draw_panel_image(ps, fonts, size=None):
         else:
             text = str(row.get('label', slot))
         text = text.upper()
+        glyph = panel_label_glyph(ps, row) if kind not in ('back', 'error_none') else None   # 0.1.46: パッドの印
+        if glyph:
+            tok = '{btn:' + glyph + '}'
+            text = (text + ' ' + tok) if getattr(ps, 'glyph_side', 'left') == 'right' else (tok + ' ' + text)
         fs = int(S * 0.066)
-        font = fonts.get(HUD_TEXT_FONT, fs)
-        tw, th = _panel_text_size(font, text)
+        runs, tw, top, bot = _panel_label_runs(fonts, text, fs)
+        th = bot - top
         tri = fs * 0.55 if kind == 'folder' else 0.0     # フォルダの印 (▸ を描く。HUD のフォントに '>' が無いので図形で)
         while tw + tri * 1.4 > max_w and fs > 10:
             fs -= 2
-            font = fonts.get(HUD_TEXT_FONT, fs)
-            tw, th = _panel_text_size(font, text)
+            runs, tw, top, bot = _panel_label_runs(fonts, text, fs)
+            th = bot - top
             tri = fs * 0.55 if kind == 'folder' else 0.0
         if n == 1:
             x, y = c, c - (r_in + R) / 2.0
@@ -8171,7 +8291,10 @@ def draw_panel_image(ps, fonts, size=None):
             k = 1.08 if n > 4 else 0.92                  # 項目が少ないと扇形が広いので、文字を少し内側へ
             x, y = c + r_lab * math.sin(a) * k, c - r_lab * math.cos(a) * k
         x0 = x - (tw + tri * 1.4) / 2.0
-        d.text((x0, y - th / 2.0 - fs * 0.15), text, font=font, fill=color)
+        rx = x0
+        for t, f, adv in runs:                           # 0.1.46: 文字と印を順に描く (上下は全体の真ん中にそろえる)
+            d.text((rx, y - (top + bot) / 2.0), t, font=f, fill=color)
+            rx += adv
         if tri:
             tx = x0 + tw + tri * 0.4
             d.polygon([(tx, y - tri / 2.0), (tx + tri, y), (tx, y + tri / 2.0)], fill=color)
@@ -8249,6 +8372,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         self.dpad = VirtualDPad()
         self.pov_buttons = [19, 20, 21, 22]
         self.dpad_debug_hud = bool(DPAD_DEBUG_HUD)   # Q29-3 調査用
+        self.hud_debug_rows = bool(HUD_DEBUG_ROWS)   # 0.1.46: デバッグ用の段を出すか
         self._dpad_dbg_out = '-'                     # 最後に vJoy に出したもの (POV の角度 / ボタン番号)
         self._dpad_dbg_vals = {}
         self._dpad_dbg_time = 0.0
@@ -8906,6 +9030,9 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             print("[HUD] デバッグログ: {}".format("出す" if on else "隠す"))
         elif name == 'hud_log_clear':
             HUD_LOG.clear()
+        elif name == 'hud_debug_rows':                   # 0.1.46
+            self.hud_debug_rows = not self.hud_debug_rows
+            print("[HUD] デバッグ用の段: {}".format("出す" if self.hud_debug_rows else "隠す"))
         elif name == 'dpad_debug':
             self.dpad_debug_hud = not self.dpad_debug_hud
             print("[DPAD] 数値の段: {}".format("出す" if self.dpad_debug_hud else "隠す"))
@@ -9275,8 +9402,9 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                          'sig:config_gesture': self.cfgmode.gesture.state == 'hold',
                          'sig:brake': brake_on,
                          'sig:dpad_debug': self.dpad_debug_hud,
-                         'sig:trigger_zone': trg_active,
-                         'sig:panel': pnl_values is not None},
+                         'sig:trigger_zone': trg_active and self.hud_debug_rows,          # 0.1.46: デバッグ用の段は HUD_DEBUG_ROWS のときだけ
+                         'sig:panel': pnl_values is not None and self.hud_debug_rows,
+                         'sig:font_test': bool(HUD_FONT_TEST) and self.hud_debug_rows},
                 buttons=self._vbtn_state,
                 values={'throttle': self.throttle_z.x,
                         'cruise_power': drive['hud_throttle'] if self.assist.cruise_on else self.throttle_z.x,
