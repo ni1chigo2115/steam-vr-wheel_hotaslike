@@ -22,8 +22,17 @@ VC コンソール (vc_gui.py): PC の画面に出す設定とログの窓。別
   0. コクピット  動いているコクピットの操作 (プロファイルの切り替え・読み直し・コンソールの出し隠し・デバッグ命令)。
   1. ログ       media/vc_log.txt を 250 ms ごとに読み足して出す。絞り込み・一時停止・消す・フォルダを開く。
   2. 設定       古い configurator と同じ項目。steam_vr_wheel.PadConfig 経由で読み書きし、変えたらすぐ保存する。
-  3. プロファイル  profiles/*.json の "settings" を型つきの部品で編集する。書かないキーは書かないまま (= コードの既定)。
-  4. パネル     "panels" (left_game / right_game) の木と項目のフォームと丸い見本 (左右 2 つ並べる)。警告の一覧は変えるたびに作り直す。
+  3. プロファイル  profiles/*.json の "profile" (id / name / note) と "settings" を型つきの部品で編集する。書かないキーは書かないまま (= コードの既定)。
+  4. ボタン     "input" (base / unbind / bindings) の編集 (0.1.4)。左右の X Y A B・グリップ・スティック押し込み・トリガーの割り当ての表と、
+                そのほかの割り当ての一覧 (input / command / args)。
+  5. パネル     "panels" (left_game / right_game) の木と項目のフォームと丸い見本 (左右 2 つ並べる)。警告の一覧は変えるたびに作り直す。
+
+■ 0.1.4 の足したもの (_joystick.py v0.1.46 の形に合わせた)
+  - 「ボタン」タブ: 表の 1 行 = 物理の入力 1 つ。選ぶと unbind (既定の割り当てを外す) と bindings (自分の割り当て) を書く。
+    unbind は既定の割り当てだけを外し、プロファイルの bindings は外さない。だから「置き換え」= unbind + bindings、「出さない」= unbind だけ。
+  - 設定: input.trigger_* と panel.glyph_side / panel.glyph_map。プロファイルのタブ: id / name / note の欄。
+  - パネル: 左右ごとの latch。項目の glyph (印)。ラベルの「印…」ボタンで {A} {LB} などのトークンを入れる。見本にも印を出す。
+  - 印の字体 media/hotas_sacc/gamepad_xboxone.otf を wx.Font.AddPrivateFont (wx 4.1 以上) で読む。読めなければ名前 ([A] など) で出す。
 
 ■ コクピットとの受け渡し (0.1.2。形は _joystick.py v0.1.44 と合わせてある)
   - 読む: media/vc_status.json  本体が約 1 秒ごと (と変わったとき) に書く。
@@ -40,7 +49,7 @@ VC コンソール (vc_gui.py): PC の画面に出す設定とログの窓。別
   - 読む: <このファイルのフォルダ>/media/vc_log.txt   (UTF-8、_joystick.py が 1 行ずつ足す。ジョイスティックの起動時に空にされる)
   - 読む/書く: <このファイルのフォルダ>/profiles/*.json  (format = 'vc-profile'、format_version = 1)
       保存の前に <名前>.json.bak へ古い中身を写す。知らないキーはそのまま残す。
-      キーの順は format, format_version, profile, settings, input, panels、項目は label, type, folder, command, args, exec, hold, block_a, hud。
+      キーの順は format, format_version, profile, settings, input, panels、項目は label, glyph, type, folder, command, args, exec, hold, block_a, latch, hud。
       保存した中身は、ジョイスティックがプロファイルを読み直したとき (N キーで切り替え、または再起動) に効く。
   - 読む/書く: media/config.json (PadConfig が管理。古い設定タブだけが触る)
   - ファイルまわりは全部 try/except。失敗しても落とさず、状態バーに 1 行出す。
@@ -54,12 +63,13 @@ import collections
 import io
 import json
 import os
+import re
 import sys
 import time
 
 import wx
 
-VC_GUI_VERSION = '0.1.3'
+VC_GUI_VERSION = '0.1.4'
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(PACKAGE_DIR, 'media', 'vc_log.txt')
@@ -82,13 +92,69 @@ NEW_ITEM_LABEL = 'NEW'                  # [CONFIG] スロットを足したと�
 
 PANEL_SLOT_MAX = 8                      # 1 つの階層に置けるスロットの数 (_joystick.py の PANEL_SLOTS)
 PANEL_BACK_SLOT = '1'                   # 下の階層で「戻る」に予約されている番号
-ITEM_KEY_ORDER = ['label', 'type', 'folder', 'command', 'args', 'exec', 'hold', 'block_a', 'latch', 'hud']
+ITEM_KEY_ORDER = ['label', 'glyph', 'type', 'folder', 'command', 'args', 'exec', 'hold', 'block_a', 'latch', 'hud']
 TOP_KEY_ORDER = ['format', 'format_version', 'profile', 'settings', 'input', 'panels']
 PANEL_COMMANDS = ['vjoy_button', 'brake', 'cruise', 'config']   # 0.1.1: 'config' = コンフィグモードへ
 CRUISE_ACTIONS = ['toggle', 'on', 'off', 'center']
 HUD_MARKS = ['mnvr', 'brake']
 VJOY_AXES = ['HID_USAGE_X', 'HID_USAGE_Y', 'HID_USAGE_Z', 'HID_USAGE_RX',
              'HID_USAGE_RY', 'HID_USAGE_RZ', 'HID_USAGE_SL0', 'HID_USAGE_SL1']
+
+# ---- パッドの印 (glyph) ----
+GLYPH_NAMES = ['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'VIEW', 'MENU', 'XBOX', 'LS', 'RS']   # ラベルの {A} などと項目の glyph に書ける名前
+GLYPH_CHARS = {'A': 'a', 'B': 'b', 'X': 'x', 'Y': 'y', 'LB': '[', 'RB': ']', 'LT': '{', 'RT': '}',
+               'XBOX': 'g', 'MENU': 'm', 'VIEW': 'v', 'LS': '<', 'RS': '>'}                      # 名前 -> 字体の中の文字 (_joystick.py と同じ)
+GLYPH_SIDES = ['left', 'right', 'off']
+GLYPH_MAP_DEFAULT = collections.OrderedDict([
+    ('1', 'A'), ('2', 'B'), ('3', 'X'), ('4', 'Y'), ('5', 'LB'), ('6', 'RB'), ('7', 'VIEW'), ('8', 'MENU'), ('9', 'LS'), ('10', 'RS')])
+GLYPH_FONT_PATHS = [os.path.join(PACKAGE_DIR, 'media', 'hotas_sacc', 'gamepad_xboxone.otf'),
+                    os.path.join(PACKAGE_DIR, 'media', 'gamepad_xboxone.otf')]   # [CONFIG] 印の字体 (上から探す)
+GLYPH_TOKEN_RE = re.compile(r'\{(?:btn:)?([A-Za-z0-9_]+)\}')      # {A} と {btn:A}
+
+# ---- ボタンの割り当て (input) ----
+# _joystick.py の DEFAULT_INPUT_BINDINGS と TRIGGER_BUTTON_BINDINGS の写し。あちらを変えたら合わせる。
+# (入力の名前, 命令, 引数)。画面に「今の出力」を出すためと、unbind が要るかを知るために使う。
+DEFAULT_INPUT_BINDINGS = [
+    ('left.grip', 'vjoy_button', {'button': 2}),
+    ('left.menu', 'vjoy_button', {'button': 3}),
+    ('left.stick_click', 'vjoy_zone_button', {'hand': 'left'}),
+    ('left.a', 'vjoy_button', {'button': 17}),
+    ('right.grip', 'vjoy_button', {'button': 10}),
+    ('right.menu', 'vjoy_button', {'button': 11}),
+    ('right.stick_click', 'vjoy_zone_button', {'hand': 'right'}),
+    ('right.a', 'vjoy_button', {'button': 18}),
+    ('left.trigger_touch', 'vjoy_button', {'button': 31, 'press_needs': 'trigger_pre_press_button'}),
+    ('right.trigger_touch', 'vjoy_button', {'button': 32, 'press_needs': 'trigger_pre_press_button'}),
+    ('left.trigger_value', 'vjoy_axis', {'axis': 'HID_USAGE_SL0'}),
+    ('right.trigger_value', 'vjoy_axis', {'axis': 'HID_USAGE_SL1'}),
+    ('left.pov_mode', 'vjoy_dpad', {'pov': 1, 'buttons': [19, 20, 21, 22]}),
+    ('right.stick_dir', 'vjoy_dpad', {'pov': 1, 'buttons': [19, 20, 21, 22]}),
+]
+TRIGGER_BUTTON_BINDINGS = {
+    'analog': [('left.trigger_full', 'vjoy_button', {'button': 1, 'press_needs': 'trigger_press_button'}),
+               ('right.trigger_full', 'vjoy_button', {'button': 9, 'press_needs': 'trigger_press_button'})],
+    'steamvr': [('left.trigger', 'vjoy_button', {'button': 1, 'press_needs': 'trigger_press_button'}),
+                ('right.trigger', 'vjoy_button', {'button': 9, 'press_needs': 'trigger_press_button'})],
+}
+ZONE_DEFAULT_RANGE = {'left': (4, 8), 'right': (12, 16)}      # 区画ボタンの既定の番号 (スティック押し込みを 5 つに割る)
+INPUT_PARTS = ['menu', 'grip', 'stick_click', 'trigger', 'a', 'trigger_touch', 'trigger_value',
+               'trigger_half', 'trigger_full', 'stick_dir', 'pov_mode']       # 左右それぞれにある入力の名前 (bN は別に数える)
+INPUT_ALIASES = {'left.x': 'left.a', 'left.y': 'left.menu', 'right.b': 'right.menu'}   # 別名 -> 中の名前
+BIND_COMMANDS = ['vjoy_button', 'vjoy_zone_button', 'vjoy_axis', 'vjoy_dpad', 'panel_execute']
+INPUT_BASES = ['default', 'none']
+BIND_TABLE_ROWS = [      # (入力の名前, 画面の名前)。表の 1 行 = 物理の入力 1 つ
+    ('left.a', '左 X  (left.a)'), ('left.menu', '左 Y  (left.menu)'), ('left.grip', '左 グリップ  (left.grip)'),
+    ('left.stick_click', '左 スティック押し込み  (left.stick_click)'),
+    ('left.trigger_full', '左 トリガー 引き切り  (left.trigger_full)'), ('left.trigger_half', '左 トリガー 半押し  (left.trigger_half)'),
+    ('left.trigger_touch', '左 トリガー 触れる  (left.trigger_touch)'), ('left.trigger_value', '左 トリガー 軸  (left.trigger_value)'),
+    ('right.a', '右 A  (right.a)'), ('right.menu', '右 B  (right.menu)'), ('right.grip', '右 グリップ  (right.grip)'),
+    ('right.stick_click', '右 スティック押し込み  (right.stick_click)'),
+    ('right.trigger_full', '右 トリガー 引き切り  (right.trigger_full)'), ('right.trigger_half', '右 トリガー 半押し  (right.trigger_half)'),
+    ('right.trigger_touch', '右 トリガー 触れる  (right.trigger_touch)'), ('right.trigger_value', '右 トリガー 軸  (right.trigger_value)'),
+]
+INPUT_KEY_ORDER = ['base', 'unbind', 'bindings']
+BINDING_KEY_ORDER = ['input', 'command', 'args']
+PROFILE_KEY_ORDER = ['id', 'name', 'note']
 
 DEBUG_COMMANDS = [('hud_recenter', 'HUD を基準に合わせ直す'), ('version', 'バージョンを出す'),
                   ('drive_status', 'drive_status'), ('bus_status', 'bus_status')]   # 本体の debug 命令の名前
@@ -228,6 +294,27 @@ SETTING_SPECS = [
           'これより小さい入力は 0 のまま (手のぶれでふらつかないように)。', lo=0.0, hi=0.2, step=0.005),
     _spec('dpad.buttons', '十字キーのボタン', 'intlist4_or_null', None,
           'null = 十字キーは POV だけ。[上, 下, 左, 右] のボタン番号 (1〜128) をカンマで 4 つ書くと、ボタンでも出す。空欄 = null。'),
+    _spec('input.trigger_half', 'トリガー: 半押しの深さ', 'float', 0.25,
+          'この深さ以上引くと「半押し」とみなす (0〜1)。実機で直す出発点。', lo=0.0, hi=1.0, step=0.01),
+    _spec('input.trigger_full', 'トリガー: 引き切りの深さ', 'float', 0.90,
+          'この深さ以上引くと「引き切り」とみなす (0〜1)。', lo=0.0, hi=1.0, step=0.01),
+    _spec('input.trigger_release', 'トリガー: 戻した深さ', 'float', 0.10,
+          'この深さ以下に戻すと「戻した」とみなす。ロックもここで外れる (0〜1)。', lo=0.0, hi=1.0, step=0.01),
+    _spec('input.trigger_half_delay', 'トリガー: 半押しを出すまでの待ち (秒)', 'float', 0.15,
+          '二段 (both / switch) で、半押しの区間に入ってからこの秒数とどまったら半押しを出す。短いと引き切るときに半押しが先に出やすい。lock では使わない。',
+          lo=0.0, hi=1.0, step=0.01),
+    _spec('input.trigger_haptic', 'トリガー: 半押しで震える', 'bool', True,
+          '半押しが成り立ったとき、そのコントローラーを 1 回短く震わせる。'),
+    _spec('input.trigger_mode', 'トリガー: 二段の方式', 'choice', 'lock',
+          'lock = 先に成り立った操作だけ (戻すまで他は出ない)。both = 半押しと引き切りが両方出る (引き切っても半押しは残る)。'
+          'switch = 引き切ると半押しを外す (戻すまで引き切りだけ)。', choices=['lock', 'both', 'switch']),
+    _spec('input.trigger_button_from', 'トリガーのボタンの出し方', 'choice', 'analog',
+          'analog = アナログの値の引き切り (trigger_full) でボタン 1 / 9 を押す。steamvr = SteamVR の「押した」イベント (古い出し方)。',
+          choices=['analog', 'steamvr']),
+    _spec('panel.glyph_side', 'パネル: 印を出す側', 'choice', 'left',
+          'パネルのラベルの横に、割り当てたボタンのパッドの印を自動で出す位置。off = 出さない。', choices=GLYPH_SIDES),
+    _spec('panel.glyph_map', 'パネル: ボタン番号と印の対応', 'glyphmap', GLYPH_MAP_DEFAULT,
+          '{"vJoy のボタン番号": "印の名前"} の形。印の名前は ' + ' '.join(GLYPH_NAMES) + ' のどれか。書くと既定の表の代わりになる。'),
     _spec('debug.keys', 'コンソールのキー', 'bool', False,
           'コンソールのキー (ショートカット) を使う。false = キーを押しても何もしない (誤爆を防ぐ)。'),
 ]
@@ -300,6 +387,30 @@ def _order_side(side, is_left):
     return out
 
 
+def _order_keys(d, order):
+    """dict のキーを order の順にし、知らないキーは後ろにそのまま。"""
+    if not isinstance(d, dict):
+        return d
+    out = collections.OrderedDict()
+    for k in order:
+        if k in d:
+            out[k] = d[k]
+    for k in d:
+        if k not in out:
+            out[k] = d[k]
+    return out
+
+
+def _order_input(inp):
+    """input の中を base, unbind, bindings の順に。bindings の行は input, command, args の順。"""
+    if not isinstance(inp, dict):
+        return inp
+    out = _order_keys(inp, INPUT_KEY_ORDER)
+    if isinstance(out.get('bindings'), list):
+        out['bindings'] = [_order_keys(r, BINDING_KEY_ORDER) for r in out['bindings']]
+    return out
+
+
 def order_profile(data):
     """保存用に、プロファイル全体のキーを決まった順に並べた OrderedDict を返す。"""
     if not isinstance(data, dict):
@@ -319,6 +430,10 @@ def order_profile(data):
                 if pk not in np_:
                     np_[pk] = p[pk]
             out[k] = np_
+        elif k == 'input':
+            out[k] = _order_input(data[k])
+        elif k == 'profile':
+            out[k] = _order_keys(data[k], PROFILE_KEY_ORDER)
         else:
             out[k] = data[k]
     for k in data:
@@ -351,6 +466,418 @@ def list_profile_files():
         return sorted(n for n in os.listdir(PROFILE_DIR) if n.lower().endswith('.json'))
     except Exception:
         return []
+
+
+# ------------------------------------------------------------------------------
+# パッドの印 (glyph): ラベルの {A} などと自動の印 (wx に頼らない)
+# ------------------------------------------------------------------------------
+def split_label_tokens(text):
+    """ラベルを [(種類, 値)] に分ける。種類 = 't' (ふつうの字) / 'g' (知っている印。値 = 名前) / 'u' (知らない印。値 = 書いたまま)。
+    {A} も {btn:A} も印。知らない名前の {FOO} は字として描かれる ('u')。"""
+    text = str(text)
+    out = []
+    pos = 0
+    for m in GLYPH_TOKEN_RE.finditer(text):
+        if m.start() > pos:
+            out.append(('t', text[pos:m.start()]))
+        if m.group(1) in GLYPH_NAMES:
+            out.append(('g', m.group(1)))
+        else:
+            out.append(('u', m.group(0)))
+        pos = m.end()
+    if pos < len(text):
+        out.append(('t', text[pos:]))
+    return out
+
+
+def label_plain_chars(text):
+    """HUD の文字の検査に回す字 (知っている印は取り除く)。"""
+    return ''.join(v for k, v in split_label_tokens(text) if k != 'g')
+
+
+def glyph_settings(data):
+    """(panel.glyph_side, panel.glyph_map)。書いてなければ既定。"""
+    st = data.get('settings') if isinstance(data, dict) else None
+    st = st if isinstance(st, dict) else {}
+    side = st.get('panel.glyph_side', 'left')
+    if side not in GLYPH_SIDES:
+        side = 'left'
+    gmap = st.get('panel.glyph_map')
+    try:
+        check_glyph_map(gmap)
+    except Exception:
+        gmap = GLYPH_MAP_DEFAULT
+    return side, gmap
+
+
+def auto_glyph_name(row, gmap):
+    """項目に自動で付く印の名前。無ければ None。glyph が false なら None、名前なら強制、無ければ vjoy_button の番号から引く。"""
+    g = row.get('glyph')
+    if g is False:
+        return None
+    if isinstance(g, str) and g in GLYPH_NAMES:
+        return g
+    if row.get('command') != 'vjoy_button':
+        return None
+    args = row.get('args') if isinstance(row.get('args'), dict) else {}
+    num = args.get('button')
+    if num is None and isinstance(args.get('buttons'), list) and args['buttons']:
+        num = args['buttons'][0]
+    if not _is_int(num):
+        return None
+    name = gmap.get(str(num))
+    return name if name in GLYPH_NAMES else None
+
+
+def label_parts(label, row, side, gmap):
+    """見本に描く [(種類, 値)] を作る。ラベルに印のトークンがあれば自動の印は付けない。"""
+    parts = split_label_tokens(label)
+    if side == 'off' or any(k == 'g' for k, _ in parts):
+        return parts
+    name = auto_glyph_name(row, gmap)
+    if name is None:
+        return parts
+    if side == 'right':
+        return parts + [('t', ' '), ('g', name)]
+    return [('g', name), ('t', ' ')] + parts
+
+
+def trim_parts(parts, maxlen):
+    """見本の字数に収める (印は 2 字ぶん)。収まらなければ最後を '..' にする。字だけなら昔の見本と同じ切り方。"""
+    total = sum(2 if k == 'g' else len(v) for k, v in parts)
+    if total <= maxlen:
+        return parts
+    out = []
+    left = maxlen - 1
+    for k, v in parts:
+        w = 2 if k == 'g' else len(v)
+        if w <= left:
+            out.append((k, v))
+            left -= w
+        else:
+            if k != 'g' and left > 0:
+                out.append((k, v[:left]))
+            break
+    out.append(('t', '..'))
+    return out
+
+
+def check_glyph_map(v):
+    """panel.glyph_map の値が正しいか。正しくなければ ValueError。"""
+    if not isinstance(v, dict):
+        raise ValueError(v)
+    for k, g in v.items():
+        if not (isinstance(k, str) and k.isdigit() and 1 <= int(k) <= 128):
+            raise ValueError('番号は 1〜128: {!r}'.format(k))
+        if not isinstance(g, str) or g not in GLYPH_NAMES:
+            raise ValueError('印の名前: {!r}'.format(g))
+
+
+def parse_glyph_map(text):
+    """JSON の文字から panel.glyph_map を読む。形が違えば ValueError。"""
+    v = json.loads(str(text), object_pairs_hook=collections.OrderedDict)
+    check_glyph_map(v)
+    return v
+
+
+def _font_family_name(path):
+    """otf / ttf の name 表から字体の名前 (family) を読む。読めなければ None。"""
+    import struct
+    with open(path, 'rb') as f:
+        b = f.read()
+    n = struct.unpack('>H', b[4:6])[0]
+    for i in range(n):
+        tag, _cs, off, _ln = struct.unpack('>4sIII', b[12 + 16 * i:28 + 16 * i])
+        if tag != b'name':
+            continue
+        cnt, so = struct.unpack('>HH', b[off + 2:off + 6])
+        best = None
+        for j in range(cnt):
+            p, _e, _l, nid, ln2, o = struct.unpack('>HHHHHH', b[off + 6 + 12 * j:off + 18 + 12 * j])
+            if nid != 1:
+                continue
+            raw = b[off + so + o:off + so + o + ln2]
+            text = raw.decode('utf-16-be') if p in (0, 3) else raw.decode('latin-1')
+            if p == 3 or best is None:
+                best = text
+        return best
+    return None
+
+
+# ------------------------------------------------------------------------------
+# ボタンの割り当て (input) を読み書きする道具 (wx に頼らない)
+# ------------------------------------------------------------------------------
+def normalize_input_name(name):
+    """別名 (left.x など) を中の名前にする。"""
+    name = str(name).strip()
+    return INPUT_ALIASES.get(name, name)
+
+
+def known_input_names():
+    """左右の入力の名前 (別名は含めない)。"""
+    return ['{}.{}'.format(h, p) for h in ('left', 'right') for p in INPUT_PARTS]
+
+
+def is_known_input(name):
+    n = normalize_input_name(name)
+    return n in known_input_names() or re.match(r'^(left|right)\.b\d+$', n) is not None
+
+
+def _button_from(data):
+    st = data.get('settings') if isinstance(data, dict) else None
+    v = st.get('input.trigger_button_from', 'analog') if isinstance(st, dict) else 'analog'
+    return 'steamvr' if v == 'steamvr' else 'analog'
+
+
+def _input_base(data):
+    inp = data.get('input') if isinstance(data, dict) else None
+    return 'none' if isinstance(inp, dict) and inp.get('base') == 'none' else 'default'
+
+
+def default_binding_map(base, button_from):
+    """既定の割り当て {入力の名前: (命令, 引数)}。base が none なら空。"""
+    out = collections.OrderedDict()
+    if base == 'none':
+        return out
+    rows = list(TRIGGER_BUTTON_BINDINGS.get(button_from, TRIGGER_BUTTON_BINDINGS['analog'])) + list(DEFAULT_INPUT_BINDINGS)
+    for name, cmd, args in rows:
+        out[name] = (cmd, args)
+    return out
+
+
+def managed_input_name(key, button_from):
+    """表の入力が実際に指す名前。steamvr 方式のときの「引き切り」は <手>.trigger。"""
+    if button_from == 'steamvr' and key.endswith('.trigger_full'):
+        return key[:-len('_full')]
+    return key
+
+
+def managed_names(data):
+    bf = _button_from(data)
+    return set(managed_input_name(k, bf) for k, _ in BIND_TABLE_ROWS)
+
+
+def _list_of(d, key):
+    v = d.get(key) if isinstance(d, dict) else None
+    return v if isinstance(v, list) else []
+
+
+def describe_binding(cmd, args):
+    """割り当て 1 つを短い文にする。"""
+    args = args if isinstance(args, dict) else {}
+    if cmd == 'vjoy_button':
+        if _is_int(args.get('button')):
+            return 'ボタン {}'.format(args['button'])
+        if isinstance(args.get('buttons'), list):
+            return 'ボタン {}'.format('+'.join(str(b) for b in args['buttons']))
+    elif cmd == 'vjoy_axis' and isinstance(args.get('axis'), str):
+        return '軸 {}'.format(args['axis'].replace('HID_USAGE_', ''))
+    elif cmd == 'panel_execute':
+        return 'パネル実行 {}'.format(args.get('panel'))
+    elif cmd == 'vjoy_dpad':
+        return '十字キー'
+    elif cmd == 'vjoy_zone_button':
+        b = args.get('buttons')
+        if isinstance(b, list) and len(b) == 5:
+            return '区画ボタン {}'.format(','.join(str(x) for x in b))
+        lo, hi = ZONE_DEFAULT_RANGE.get(args.get('hand'), (0, 0))
+        return '区画ボタン {}〜{}'.format(lo, hi)
+    return '{} {}'.format(cmd, json.dumps(args, ensure_ascii=False))
+
+
+def read_binding_state(data, key):
+    """表の 1 行ぶんの今の状態。返り値 dict: name / mode / button / axis / panel / buttons / changed / text。
+    mode = default / none / button / axis / panel / zone / custom (複数や特殊で、表では 1 つに決められない)。"""
+    bf = _button_from(data)
+    name = managed_input_name(key, bf)
+    default = default_binding_map(_input_base(data), bf).get(name)
+    inp = data.get('input') if isinstance(data.get('input'), dict) else {}
+    unbind = [normalize_input_name(n) for n in _list_of(inp, 'unbind')]
+    rows = [r for r in _list_of(inp, 'bindings') if isinstance(r, dict) and normalize_input_name(r.get('input', '')) == name]
+    st = {'name': name, 'mode': 'default', 'button': None, 'axis': None, 'panel': None, 'buttons': None,
+          'changed': False, 'text': ''}
+    if rows:
+        st['changed'] = True
+        text = ' + '.join(describe_binding(r.get('command'), r.get('args')) for r in rows)
+        keeps_default = default is not None and name not in unbind
+        if keeps_default:
+            text += ' (+ 既定の {})'.format(describe_binding(default[0], default[1]))
+        st['text'] = text
+        st['mode'] = 'custom'
+        if len(rows) == 1 and not keeps_default:
+            cmd = rows[0].get('command')
+            args = rows[0].get('args') if isinstance(rows[0].get('args'), dict) else {}
+            if cmd == 'vjoy_button' and set(args) == set(['button']) and _is_int(args['button']):
+                st['mode'], st['button'] = 'button', args['button']
+            elif cmd == 'vjoy_axis' and set(args) == set(['axis']) and args['axis'] in VJOY_AXES:
+                st['mode'], st['axis'] = 'axis', args['axis']
+            elif cmd == 'panel_execute' and set(args) == set(['panel']) and args['panel'] in ('left_game', 'right_game'):
+                st['mode'], st['panel'] = 'panel', args['panel']
+            elif (cmd == 'vjoy_zone_button' and set(args) <= set(['hand', 'buttons']) and isinstance(args.get('buttons'), list)
+                  and len(args['buttons']) == 5 and all(_is_int(x) for x in args['buttons'])):
+                st['mode'], st['buttons'] = 'zone', list(args['buttons'])
+    elif name in unbind:
+        st['changed'] = True
+        st['mode'] = 'none'
+        st['text'] = 'なし'
+    elif default is not None:
+        st['text'] = '{} (既定)'.format(describe_binding(default[0], default[1]))
+    else:
+        st['text'] = 'なし'
+        if _input_base(data) == 'none':
+            st['text'] = 'なし (base が none)'
+    return st
+
+
+def apply_binding_choice(data, key, choice):
+    """表の入力 1 つの割り当てを書き換える。choice = {'mode': default/none/button/axis/panel/zone, 'button', 'axis', 'panel', 'buttons'}。
+    この入力の unbind と bindings の行だけを入れ替え、ほかの行・ほかの unbind は触らない。形が悪ければ ValueError。"""
+    bf = _button_from(data)
+    name = managed_input_name(key, bf)
+    mode = choice.get('mode', 'default')
+    if mode == 'zone' and not choice.get('buttons'):
+        mode = 'default'                  # 番号を決めない区画ボタン = 既定
+    inp = data.get('input')
+    if not isinstance(inp, dict):
+        if inp is not None:
+            raise ValueError('input が { } の形ではありません')
+        if mode == 'default':
+            return
+        inp = collections.OrderedDict()
+        inp['base'] = 'default'
+        data['input'] = inp
+    if inp.get('unbind') is not None and not isinstance(inp.get('unbind'), list):
+        raise ValueError('input.unbind が [ ] の形ではありません')
+    if inp.get('bindings') is not None and not isinstance(inp.get('bindings'), list):
+        raise ValueError('input.bindings が [ ] の形ではありません')
+    unbind = [n for n in _list_of(inp, 'unbind') if normalize_input_name(n) != name]
+    rows = [r for r in _list_of(inp, 'bindings')
+            if not (isinstance(r, dict) and normalize_input_name(r.get('input', '')) == name)]
+    if mode != 'default' and name in default_binding_map('default', bf):
+        unbind.append(name)                # 既定の割り当てがある入力だけ unbind が要る
+    args = collections.OrderedDict()
+    cmd = None
+    if mode == 'button':
+        cmd = 'vjoy_button'
+        args['button'] = int(choice['button'])
+        rest = name.split('.', 1)[-1]          # トリガーは既定と同じ条件 (ロック・触れてから) を付ける (_joystick.py の既定の割り当てと同じ)
+        if rest in ('trigger_full', 'trigger'):
+            args['press_needs'] = 'trigger_press_button'
+        elif rest == 'trigger_touch':
+            args['press_needs'] = 'trigger_pre_press_button'
+    elif mode == 'axis':
+        cmd = 'vjoy_axis'
+        args['axis'] = choice['axis']
+    elif mode == 'panel':
+        cmd = 'panel_execute'
+        args['panel'] = choice['panel']
+    elif mode == 'zone':
+        cmd = 'vjoy_zone_button'
+        args['hand'] = name.split('.')[0]
+        args['buttons'] = [int(x) for x in choice['buttons']]
+    if cmd is not None:
+        row = collections.OrderedDict()
+        row['input'] = name
+        row['command'] = cmd
+        row['args'] = args
+        rows.append(row)
+    if unbind:
+        inp['unbind'] = unbind
+    else:
+        inp.pop('unbind', None)
+    if rows:
+        inp['bindings'] = rows
+    else:
+        inp.pop('bindings', None)
+
+
+def set_input_base(data, base):
+    """input.base を書く。input が無くて default にするなら何も書かない。"""
+    inp = data.get('input')
+    if not isinstance(inp, dict):
+        if inp is not None:
+            raise ValueError('input が { } の形ではありません')
+        if base == 'default':
+            return
+        inp = collections.OrderedDict()
+        data['input'] = inp
+    inp['base'] = base
+
+
+def other_binding_rows(data):
+    """表で扱わない bindings の行 [(bindings の中の番号, 行)]。"""
+    inp = data.get('input')
+    managed = managed_names(data)
+    out = []
+    for i, r in enumerate(_list_of(inp, 'bindings')):
+        if isinstance(r, dict) and normalize_input_name(r.get('input', '')) in managed:
+            continue
+        out.append((i, r))
+    return out
+
+
+def store_other_binding(data, index, row):
+    """index の行を row にする。index が None なら足す。"""
+    inp = data.get('input')
+    if not isinstance(inp, dict):
+        if inp is not None:
+            raise ValueError('input が { } の形ではありません')
+        inp = collections.OrderedDict()
+        inp['base'] = 'default'
+        data['input'] = inp
+    rows = inp.get('bindings')
+    if rows is None:
+        rows = []
+        inp['bindings'] = rows
+    if not isinstance(rows, list):
+        raise ValueError('input.bindings が [ ] の形ではありません')
+    if index is None:
+        rows.append(row)
+    else:
+        rows[index] = row
+
+
+def delete_other_binding(data, index):
+    inp = data.get('input')
+    rows = _list_of(inp, 'bindings')
+    if 0 <= index < len(rows):
+        del rows[index]
+        if not rows:
+            inp.pop('bindings', None)
+
+
+def validate_binding_row(input_name, command, args_text):
+    """割り当ての行を調べる。返り値 = (止める問題, 警告, args の dict か None)。知らない入力名は警告、知らない命令と壊れた JSON は止める。"""
+    errors, warnings, args = [], [], None
+    name = str(input_name).strip()
+    if not name:
+        errors.append('入力の名前が空です')
+    elif not is_known_input(name):
+        warnings.append("知らない入力名です: '{}' (left.a / right.grip のような名前、または left.b12 のような生のボタン番号)".format(name))
+    if command not in BIND_COMMANDS:
+        errors.append("知らない命令です: {!r} ({} のどれか)".format(command, ', '.join(BIND_COMMANDS)))
+    t = str(args_text).strip()
+    if not t:
+        args = collections.OrderedDict()
+    else:
+        try:
+            args = json.loads(t, object_pairs_hook=collections.OrderedDict)
+        except ValueError as e:
+            errors.append('args が JSON ではありません: {}'.format(e))
+            args = None
+        else:
+            if not isinstance(args, dict):
+                errors.append('args は { } の形で書いてください')
+                args = None
+    if args is not None and not errors:
+        if command == 'vjoy_button' and not (_is_int(args.get('button')) and 1 <= args['button'] <= 128) \
+                and not isinstance(args.get('buttons'), list):
+            warnings.append('vjoy_button には button (1〜128) が要ります')
+        if command == 'vjoy_axis' and args.get('axis') not in VJOY_AXES:
+            warnings.append('vjoy_axis の axis は {} のどれかです'.format(', '.join(VJOY_AXES)))
+        if command == 'panel_execute' and args.get('panel') not in ('left_game', 'right_game'):
+            warnings.append("panel_execute の panel は 'left_game' か 'right_game' です")
+    return errors, warnings, args
 
 
 class ProfileModel(object):
@@ -495,8 +1022,9 @@ def valid_slots(table, is_root):
     return sorted(out, key=_slot_sort_key)
 
 
-def level_entries(data, side, fname):
-    """見本用: その階層の 1〜n 番を [(文字, 種類)] で返す。種類 = item/folder/none/rest/missing/back。"""
+def level_entries(data, side, fname, with_parts=False):
+    """見本用: その階層の 1〜n 番を [(文字, 種類)] で返す。種類 = item/folder/none/rest/missing/back。
+    with_parts=True なら [(文字, 種類, 印つきの部品の並び)] (0.1.4。印は label_parts を見る)。"""
     table = get_table(data, side, fname)
     if table is None:
         return []
@@ -504,13 +1032,21 @@ def level_entries(data, side, fname):
     vs = valid_slots(table, root)
     n = len(vs) + (0 if root else 1)
     out = []
+    gside, gmap = glyph_settings(data)
+
+    def add(text, kind, row):
+        if with_parts:
+            out.append((text, kind, label_parts(text, row, gside, gmap) if row is not None else [('t', text)]))
+        else:
+            out.append((text, kind))
+
     for k in range(1, n + 1):
         if not root and k == 1:
-            out.append(('BACK', 'back'))
+            add('BACK', 'back', None)
             continue
         row = table.get(str(k))
         if not isinstance(row, dict):
-            out.append(('', 'missing'))
+            add('', 'missing', None)
             continue
         t = row.get('type')
         if t == 'NONE':
@@ -521,7 +1057,7 @@ def level_entries(data, side, fname):
             kind = 'folder'
         else:
             kind = 'item'
-        out.append((str(row.get('label', '')), kind))
+        add(str(row.get('label', '')), kind, row)
     return out
 
 
@@ -546,9 +1082,14 @@ def _check_item(where, row, is_left, out):
         out.append(('warn', where, "type は 'NONE' か 'REST' だけです ({!r})".format(t)))
     label = row.get('label')
     if label is not None:
-        bad = sorted(set(c for c in str(label) if c not in LABEL_OK_CHARS))
+        bad = sorted(set(c for c in label_plain_chars(label) if c not in LABEL_OK_CHARS))
         if bad:
             out.append(('info', where, 'ラベルに HUD の文字で出せない字があります: {} (A-Z 0-9 空白 / . - + だけ)'.format(' '.join(bad)[:20])))
+        for kind, val in split_label_tokens(label):
+            if kind == 'u':
+                out.append(('warn', where, '知らない印 {} (字としてそのまま描かれます。使える名前: {})'.format(val, ' '.join(GLYPH_NAMES))))
+    if 'glyph' in row and row['glyph'] is not False and not (isinstance(row['glyph'], str) and row['glyph'] in GLYPH_NAMES):
+        out.append(('warn', where, 'glyph は false か印の名前 ({}) です ({!r})'.format(' '.join(GLYPH_NAMES), row['glyph'])))
     if 'folder' in row and not is_left:
         out.append(('warn', where, '右パネルの項目に folder は書けません (捨てられます)'))
     if 'exec' in row:
@@ -654,8 +1195,10 @@ def validate_panels(data):
             out.append(('error', 'left_game', 'パネルの中身は { } の形で書いてください'))
         else:
             for k in side:
-                if k not in ('root', 'folders'):
+                if k not in ('root', 'folders', 'latch'):
                     out.append(('warn', 'left_game', "知らないキー '{}'".format(k)))
+            if 'latch' in side and not isinstance(side['latch'], bool):
+                out.append(('warn', 'left_game', 'latch は true / false です ({!r})'.format(side['latch'])))
             root = str(side.get('root', 'main'))
             folders = side.get('folders') or {}
             if not isinstance(folders, dict):
@@ -677,9 +1220,11 @@ def validate_panels(data):
             out.append(('error', 'right_game', 'パネルの中身は { } の形で書いてください'))
         else:
             for k in side:
-                if k not in ('items',):
+                if k not in ('items', 'latch'):
                     out.append(('warn', 'right_game', "知らないキー '{}'{}".format(
                         k, ' (右パネルにフォルダは書けません。捨てられます)' if k == 'folders' else '')))
+            if 'latch' in side and not isinstance(side['latch'], bool):
+                out.append(('warn', 'right_game', 'latch は true / false です ({!r})'.format(side['latch'])))
             items = side.get('items') or {}
             if not isinstance(items, dict):
                 out.append(('error', 'right_game', 'items は {スロット: 項目} の形で書いてください'))
@@ -786,15 +1331,59 @@ def _bold(st):
     return st
 
 
-def parse_intlist4(text):
-    """'1,2,3,4' -> [1, 2, 3, 4]。空欄は None。形が違えば ValueError (各 1〜128 の整数 4 つ)。"""
+def parse_intlistn(text, n):
+    """'1,2,3' -> [1, 2, 3]。空欄は None。形が違えば ValueError (各 1〜128 の整数 n 個)。"""
     raw = str(text).replace('、', ',').replace(',', ' ').replace('[', ' ').replace(']', ' ').split()
     if not raw:
         return None
     nums = [int(x) for x in raw]
-    if len(nums) != 4 or any(n < 1 or n > 128 for n in nums):
+    if len(nums) != n or any(x < 1 or x > 128 for x in nums):
         raise ValueError(text)
     return nums
+
+
+def parse_intlist4(text):
+    """'1,2,3,4' -> [1, 2, 3, 4]。空欄は None。形が違えば ValueError (各 1〜128 の整数 4 つ)。"""
+    return parse_intlistn(text, 4)
+
+
+_PAD_FONT = {'tried': False, 'face': None}
+
+
+def load_pad_font():
+    """印の字体を読んで、字体の名前を返す。読めなければ None (そのとき印は [A] のような名前で出す)。1 回だけ試す。
+    wx.Font.AddPrivateFont は wx 4.1 以上。無ければ AttributeError なので、その旨を 1 行出して名前の表示にする。"""
+    if _PAD_FONT['tried']:
+        return _PAD_FONT['face']
+    _PAD_FONT['tried'] = True
+    for path in GLYPH_FONT_PATHS:
+        if not os.path.exists(path):
+            continue
+        try:
+            ok = wx.Font.AddPrivateFont(path)
+            fam = _font_family_name(path)
+            if ok is False or not fam:
+                print('[VC] 印の字体を登録できません: {}'.format(path))
+                continue
+            f = wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL, False, fam)
+            if f.IsOk() and f.GetFaceName().lower() == fam.lower():
+                _PAD_FONT['face'] = fam
+                return fam
+            print('[VC] 印の字体が使えません (名前が合わない): {}'.format(fam))
+        except Exception as e:
+            print('[VC] 印の字体を読めません (wx 4.1 以上が要ります): {}'.format(e))
+    return None
+
+
+def make_pad_font(size):
+    """印の字体の wx.Font。読めていなければ None。"""
+    face = load_pad_font()
+    if not face:
+        return None
+    try:
+        return wx.Font(size, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL, False, face)
+    except Exception:
+        return None
 
 
 def _fmt_default(v):
@@ -802,6 +1391,8 @@ def _fmt_default(v):
         return 'null'
     if isinstance(v, list):
         return json.dumps(v)
+    if isinstance(v, dict):
+        return json.dumps(v, ensure_ascii=False)
     if v is True:
         return 'true'
     if v is False:
@@ -852,7 +1443,7 @@ class ParamRow(wx.Panel):
         elif kind == 'int':
             self.ctrl.Bind(wx.EVT_SPINCTRL, self._on_event)
             self.ctrl.Bind(wx.EVT_TEXT, self._on_event)
-        elif kind == 'intlist4_or_null':
+        elif kind in ('intlist4_or_null', 'glyphmap'):
             self.ctrl.Bind(wx.EVT_TEXT, self._on_event)
         else:
             self.ctrl.Bind(wx.EVT_SPINCTRLDOUBLE, self._on_event)
@@ -863,6 +1454,9 @@ class ParamRow(wx.Panel):
         if kind == 'intlist4_or_null':
             self.last_list = None
             return wx.TextCtrl(self, size=(160, -1))
+        if kind == 'glyphmap':
+            self.last_list = spec['default']
+            return wx.TextCtrl(self, size=(560, -1))
         if kind == 'choice':
             return wx.Choice(self, choices=list(spec['choices']))
         if kind == 'bool':
@@ -885,6 +1479,12 @@ class ParamRow(wx.Panel):
         if kind == 'intlist4_or_null':
             try:
                 self.last_list = parse_intlist4(self.ctrl.GetValue())
+            except Exception:
+                pass                # 形が悪い間は、最後に正しかった値のまま
+            return self.last_list
+        if kind == 'glyphmap':
+            try:
+                self.last_list = parse_glyph_map(self.ctrl.GetValue())
             except Exception:
                 pass                # 形が悪い間は、最後に正しかった値のまま
             return self.last_list
@@ -914,6 +1514,10 @@ class ParamRow(wx.Panel):
                 if not isinstance(v, list) or len(v) != 4 or not all(_is_int(n) and 1 <= n <= 128 for n in v):
                     raise ValueError(v)
                 self.ctrl.ChangeValue(', '.join(str(n) for n in v))
+            self.last_list = v
+        elif kind == 'glyphmap':
+            check_glyph_map(v)
+            self.ctrl.ChangeValue(json.dumps(v, ensure_ascii=False))
             self.last_list = v
         else:
             if kind == 'floatnull':
@@ -956,6 +1560,11 @@ class ParamRow(wx.Panel):
                 parse_intlist4(self.ctrl.GetValue())
             except Exception:
                 d = '{}   入力が正しくありません (1〜128 の整数を 4 つ)'.format(d)
+        if self.spec['kind'] == 'glyphmap':
+            try:
+                parse_glyph_map(self.ctrl.GetValue())
+            except Exception:
+                d = '{}   入力が正しくありません ({{"5": "LB"}} の形。番号 1〜128、印は {})'.format(d, ' '.join(GLYPH_NAMES))
         if self.chk.GetValue():
             self.state.SetLabel('既定値: {}'.format(d))
         else:
@@ -1269,6 +1878,21 @@ class SettingsTab(wx.Panel):
         v = wx.BoxSizer(wx.VERTICAL)
         self.name_st = _bold(wx.StaticText(sc, label=''))
         v.Add(self.name_st, 0, wx.ALL, 8)
+        # プロファイルの見出し (profile の id / name / note)。空にしたらキーごと消す
+        self.loading_head = False
+        self.head_ctrls = {}
+        self.head_box = wx.Panel(sc)
+        gs = wx.FlexGridSizer(3, 2, 4, 8)
+        for key, title, style, size in (('id', 'id (ファイルを区別する名前)', 0, (700, -1)),
+                                         ('name', '名前 (name。一覧と HUD に出る)', 0, (700, -1)),
+                                         ('note', 'メモ (note)', wx.TE_MULTILINE, (700, 70))):
+            gs.Add(wx.StaticText(self.head_box, label=title), 0, wx.ALIGN_TOP | wx.TOP, 4)
+            c = wx.TextCtrl(self.head_box, style=style, size=size)
+            gs.Add(c, 0)
+            c.Bind(wx.EVT_TEXT, lambda e, k=key: self.on_head_text(e, k))
+            self.head_ctrls[key] = c
+        self.head_box.SetSizer(gs)
+        v.Add(self.head_box, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         v.Add(_gray(wx.StaticText(sc, label='「プロファイルに書く」を外したキーはファイルに書かず、コードの既定 (下の既定値) で動きます。')), 0, wx.LEFT | wx.BOTTOM, 8)
         for spec in SETTING_SPECS:
             row = ParamRow(sc, spec, self.on_row_change)
@@ -1289,6 +1913,15 @@ class SettingsTab(wx.Panel):
         prof = self.model.data.get('profile')
         name = prof.get('name') if isinstance(prof, dict) else None
         self.name_st.SetLabel('プロファイル: {}'.format(name or os.path.basename(self.model.path or '')))
+        self.loading_head = True
+        try:
+            head_ok = prof is None or isinstance(prof, dict)
+            for key, c in self.head_ctrls.items():
+                val = prof.get(key) if isinstance(prof, dict) else None
+                c.ChangeValue('' if val is None else str(val))
+                c.Enable(head_ok)
+        finally:
+            self.loading_head = False
         usable = settings is not None or self.model.data.get('settings') is None
         for row in self.rows:
             key = row.spec['key']
@@ -1305,6 +1938,28 @@ class SettingsTab(wx.Panel):
         self.extra.SetValue('\n'.join(extra_lines) if extra_lines else '(なし)')
         self.sc.Layout()
         self.sc.FitInside()
+
+    def on_head_text(self, event, key):
+        event.Skip()
+        if self.loading_head:
+            return
+        data = self.model.data
+        prof = data.get('profile')
+        text = self.head_ctrls[key].GetValue()
+        if prof is None:
+            if text == '':
+                return
+            prof = collections.OrderedDict()
+            data['profile'] = prof
+        if not isinstance(prof, dict):
+            return
+        if text == '':
+            prof.pop(key, None)     # 空ならキーを書かない (名前は id → ファイル名の順に代わりが使われる)
+        else:
+            prof[key] = text
+        if key == 'name':
+            self.name_st.SetLabel('プロファイル: {}'.format(text or os.path.basename(self.model.path or '')))
+        self.frame.mark_dirty()
 
     def on_row_change(self, row):
         key = row.spec['key']
@@ -1331,6 +1986,8 @@ class PreviewPanel(wx.Panel):
         self.entries = []
         self.caption = ''
         self.highlight = None       # 光らせるスロットの添字 (0 始まり。無ければ None)
+        self.font_text = None       # 描くときに作る (ふつうの字の字体 / 印の字体)
+        self.font_pad = None
         # wx 4.0 では、最初に描く前に BG_STYLE_PAINT を決めておく (作る前に決めて、作る)
         wx.Panel.__init__(self)
         try:
@@ -1379,6 +2036,34 @@ class PreviewPanel(wx.Panel):
         except Exception:
             pass
 
+    def _draw_parts(self, gc, parts, mx, my):
+        """字と印を横に並べて、(mx, my) を中心に描く。印は字体が読めていればその字体、無ければ [A] のような字。"""
+        if self.font_text is None:
+            self.font_text = wx.Font(8, wx.FONTFAMILY_SWISS, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+            self.font_pad = make_pad_font(9)
+        col = wx.Colour(235, 235, 235)
+        pieces = []
+        for kind, val in parts:
+            if kind == 'g':
+                if self.font_pad is not None and val in GLYPH_CHARS:
+                    pieces.append((GLYPH_CHARS[val], self.font_pad))
+                else:
+                    pieces.append(('[{}]'.format(val), self.font_text))
+            else:
+                pieces.append((val, self.font_text))
+        sizes = []
+        for t, f in pieces:
+            gc.SetFont(f, col)
+            sizes.append(gc.GetTextExtent(t)[:2])
+        total = sum(sz[0] for sz in sizes)
+        height = max([sz[1] for sz in sizes] + [1])
+        x = mx - total / 2.0
+        for (t, f), (tw, th) in zip(pieces, sizes):
+            gc.SetFont(f, col)
+            gc.DrawText(t, x, my - th / 2.0)
+            x += tw
+        gc.SetFont(self.font_text, col)
+
     def _draw(self, dc, w, h):
         import math
         gc = wx.GraphicsContext.Create(dc)
@@ -1401,7 +2086,8 @@ class PreviewPanel(wx.Panel):
 
         steps = 12
         hl_path = None
-        for i, (text, kind) in enumerate(self.entries):
+        for i, entry in enumerate(self.entries):
+            text, kind = entry[0], entry[1]
             a0 = (i - 0.5) * 2 * math.pi / n
             a1 = (i + 0.5) * 2 * math.pi / n
             path = gc.CreatePath()
@@ -1419,12 +2105,10 @@ class PreviewPanel(wx.Panel):
             gc.DrawPath(path)
             if i == self.highlight:
                 hl_path = path
-            label = '{} {}'.format(i + 1, text)
-            if len(label) > 11:
-                label = label[:10] + '..'
-            tw, th = gc.GetTextExtent(label)[:2]
+            parts = entry[2] if len(entry) > 2 else [('t', text)]
+            parts = [('t', '{} '.format(i + 1))] + trim_parts(parts, 9)
             mx, my = pt((a0 + a1) / 2.0, (big + small) / 2.0)
-            gc.DrawText(label, mx - tw / 2.0, my - th / 2.0)
+            self._draw_parts(gc, parts, mx, my)
         gc.SetBrush(wx.Brush(wx.Colour(30, 32, 36)))
         gc.SetPen(wx.Pen(wx.Colour(20, 20, 24), 2))
         gc.DrawEllipse(cx - small, cy - small, small * 2, small * 2)
@@ -1572,7 +2256,354 @@ def ask_close_choice(parent):
 
 
 # ------------------------------------------------------------------------------
-# タブ 4: パネル
+# 印の一覧 (ラベルの「印…」で出る小さな窓)
+# ------------------------------------------------------------------------------
+class GlyphPopup(wx.PopupTransientWindow):
+    """13 個の印をボタンで並べる。押すと on_pick(名前) を呼んで閉じる。
+    印の字体が読めていれば本物の印、読めなければ名前をボタンに出す。外を押しても閉じる。"""
+
+    def __init__(self, parent, on_pick):
+        wx.PopupTransientWindow.__init__(self, parent, wx.SIMPLE_BORDER)
+        self.on_pick = on_pick
+        panel = wx.Panel(self)
+        pad = make_pad_font(16)
+        grid = wx.GridSizer(0, 5, 4, 4)
+        for name in GLYPH_NAMES:
+            cell = wx.BoxSizer(wx.VERTICAL)
+            if pad is not None:
+                b = wx.Button(panel, label=GLYPH_CHARS[name], size=(48, 42))
+                b.SetFont(pad)
+            else:
+                b = wx.Button(panel, label=name, size=(56, 34))
+            b.SetToolTip('{' + name + '}')
+            b.Bind(wx.EVT_BUTTON, lambda e, n=name: self._pick(n))
+            cell.Add(b, 0, wx.ALIGN_CENTER)
+            if pad is not None:
+                cell.Add(_gray(wx.StaticText(panel, label=name)), 0, wx.ALIGN_CENTER)
+            grid.Add(cell, 0, wx.ALIGN_CENTER)
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(grid, 0, wx.ALL, 6)
+        panel.SetSizerAndFit(outer)
+        self.SetClientSize(panel.GetSize())
+
+    def _pick(self, name):
+        self.Dismiss()
+        wx.CallAfter(self.on_pick, name)        # 閉じ終わってから入れる (入れる側が字の欄に戻るため)
+
+
+# ------------------------------------------------------------------------------
+# タブ 4: ボタン (input)
+# ------------------------------------------------------------------------------
+BIND_MODES = [('default', '既定のまま'), ('none', '出さない'), ('button', 'vJoy ボタン'), ('axis', 'vJoy 軸'),
+              ('panel_left', '左パネルを実行'), ('panel_right', '右パネルを実行')]
+BIND_MODE_ZONE = ('zone', '区画ボタン (5 つの番号を決める)')
+
+
+class BindingDialog(wx.Dialog):
+    """表の入力 1 つの出力を選ぶ。OK を押したときに形を調べ、get_choice() で選びを返す。"""
+
+    def __init__(self, parent, label, key, state):
+        wx.Dialog.__init__(self, parent, title='割り当てを変える: {}'.format(label.split('  (')[0]))
+        self.key = key
+        self.modes = list(BIND_MODES) + ([BIND_MODE_ZONE] if key.endswith('.stick_click') else [])
+        v = wx.BoxSizer(wx.VERTICAL)
+        v.Add(_gray(wx.StaticText(self, label='今の出力: {}'.format(state['text']))), 0, wx.ALL, 8)
+        if state['mode'] == 'custom':
+            v.Add(wx.StaticText(self, label='今は複数か特殊な割り当てです。ここで選ぶと、この入力の割り当てを置き換えます。\n(細かい指定は下の「そのほかの割り当て」でも書けます)'), 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        self.ch_mode = wx.Choice(self, choices=[t for _, t in self.modes])
+        v.Add(self.ch_mode, 0, wx.LEFT | wx.RIGHT, 8)
+        self.spin = wx.SpinCtrl(self, min=1, max=128, initial=1, size=(100, -1))
+        self.ch_axis = wx.Choice(self, choices=VJOY_AXES)
+        self.ch_axis.SetSelection(0)
+        self.txt_zone = wx.TextCtrl(self, size=(220, -1))
+        lo, hi = ZONE_DEFAULT_RANGE.get(key.split('.')[0], (4, 8))
+        self.txt_zone.ChangeValue(','.join(str(n) for n in range(lo, hi + 1)))
+        grid = wx.FlexGridSizer(3, 2, 6, 8)
+        for title, ctrl in (('ボタン番号 (1〜128)', self.spin), ('軸', self.ch_axis), ('区画の 5 つの番号 (上, 右, 下, 左, 中央の順)', self.txt_zone)):
+            grid.Add(wx.StaticText(self, label=title), 0, wx.ALIGN_CENTER_VERTICAL)
+            grid.Add(ctrl, 0)
+        v.Add(grid, 0, wx.ALL, 8)
+        v.Add(_gray(wx.StaticText(self, label='「出さない」「ボタン」「軸」などは、既定の割り当てを外して (unbind) 置き換えます。')), 0, wx.LEFT | wx.RIGHT, 8)
+        v.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.ALL | wx.ALIGN_RIGHT, 8)
+        self.SetSizerAndFit(v)
+        mode = state['mode']
+        if mode == 'panel':
+            mode = 'panel_left' if state['panel'] == 'left_game' else 'panel_right'
+        names = [m for m, _ in self.modes]
+        self.ch_mode.SetSelection(names.index(mode) if mode in names else 0)
+        if state['button'] is not None and 1 <= state['button'] <= 128:
+            self.spin.SetValue(state['button'])
+        if state['axis'] in VJOY_AXES:
+            self.ch_axis.SetSelection(VJOY_AXES.index(state['axis']))
+        if state['buttons']:
+            self.txt_zone.ChangeValue(','.join(str(n) for n in state['buttons']))
+        self.ch_mode.Bind(wx.EVT_CHOICE, lambda e: self._refresh())
+        self.Bind(wx.EVT_BUTTON, self.on_ok, id=wx.ID_OK)
+        self._refresh()
+
+    def _refresh(self):
+        mode = self.modes[self.ch_mode.GetSelection()][0]
+        self.spin.Enable(mode == 'button')
+        self.ch_axis.Enable(mode == 'axis')
+        self.txt_zone.Enable(mode == 'zone')
+
+    def get_choice(self):
+        """選びを dict で返す。区画の番号が悪ければ ValueError。"""
+        mode = self.modes[self.ch_mode.GetSelection()][0]
+        c = {'mode': mode}
+        if mode == 'button':
+            c['button'] = int(self.spin.GetValue())
+        elif mode == 'axis':
+            c['axis'] = VJOY_AXES[max(0, self.ch_axis.GetSelection())]
+        elif mode in ('panel_left', 'panel_right'):
+            c['mode'] = 'panel'
+            c['panel'] = 'left_game' if mode == 'panel_left' else 'right_game'
+        elif mode == 'zone':
+            c['buttons'] = parse_intlistn(self.txt_zone.GetValue(), 5)
+        return c
+
+    def on_ok(self, event):
+        try:
+            self.get_choice()
+        except Exception:
+            wx.MessageBox('区画の番号は 1〜128 の整数を 5 つ、カンマで区切ってください', '入力を直してください', wx.OK | wx.ICON_WARNING)
+            return
+        event.Skip()
+
+
+class RawBindingDialog(wx.Dialog):
+    """そのほかの割り当て 1 行 (input / command / args) の編集。OK で調べる: 知らない入力名は聞く、知らない命令と壊れた JSON は止める。"""
+
+    def __init__(self, parent, row=None):
+        wx.Dialog.__init__(self, parent, title='割り当ての行')
+        row = row if isinstance(row, dict) else {}
+        self.result = None
+        cmd = str(row.get('command', BIND_COMMANDS[0]))
+        cmds = list(BIND_COMMANDS) + ([cmd] if cmd not in BIND_COMMANDS else [])
+        self.cb_input = wx.ComboBox(self, value=str(row.get('input', '')), choices=known_input_names(), size=(260, -1))
+        self.ch_cmd = wx.Choice(self, choices=cmds)
+        self.ch_cmd.SetSelection(cmds.index(cmd))
+        args = row.get('args')
+        self.txt_args = wx.TextCtrl(self, style=wx.TE_MULTILINE, size=(380, 110),
+                                    value=json.dumps(args, ensure_ascii=False) if isinstance(args, dict) and args else '')
+        grid = wx.FlexGridSizer(3, 2, 6, 8)
+        for title, ctrl in (('入力 (input)', self.cb_input), ('命令 (command)', self.ch_cmd), ('args (JSON の { })', self.txt_args)):
+            grid.Add(wx.StaticText(self, label=title), 0, wx.ALIGN_TOP | wx.TOP, 4)
+            grid.Add(ctrl, 0)
+        v = wx.BoxSizer(wx.VERTICAL)
+        v.Add(grid, 0, wx.ALL, 8)
+        v.Add(_gray(wx.StaticText(self, label='例: {"button": 5} / {"axis": "HID_USAGE_SL1"} / {"panel": "left_game"}')), 0, wx.LEFT | wx.RIGHT, 8)
+        v.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.ALL | wx.ALIGN_RIGHT, 8)
+        self.SetSizerAndFit(v)
+        self.Bind(wx.EVT_BUTTON, self.on_ok, id=wx.ID_OK)
+
+    def on_ok(self, event):
+        name = self.cb_input.GetValue().strip()
+        command = self.ch_cmd.GetString(self.ch_cmd.GetSelection())
+        errors, warnings, args = validate_binding_row(name, command, self.txt_args.GetValue())
+        if errors:
+            wx.MessageBox('\n'.join(errors), '入力を直してください', wx.OK | wx.ICON_WARNING)
+            return
+        if warnings and wx.MessageBox('\n'.join(warnings) + '\n\nこのまま使いますか?', '確認', wx.YES_NO | wx.ICON_QUESTION) != wx.YES:
+            return
+        row = collections.OrderedDict()
+        row['input'] = name
+        row['command'] = command
+        row['args'] = args
+        self.result = row
+        event.Skip()
+
+
+class ButtonTab(wx.Panel):
+    """プロファイルの "input" を編集する。表 = 物理の入力ごとの出力 / 下の一覧 = そのほかの割り当ての行。
+    書き換えは apply_binding_choice などの関数で行い、保存は上のバー (プロファイルとパネルのタブと同じ) で行う。"""
+
+    def __init__(self, parent, frame):
+        wx.Panel.__init__(self, parent)
+        self.frame = frame
+        self.model = frame.model
+        self.loading = False
+        self.other_index = []       # 下の一覧の行 -> bindings の中の番号
+        sc = wx.ScrolledWindow(self)
+        sc.SetScrollRate(0, 12)
+        v = wx.BoxSizer(wx.VERTICAL)
+        v.Add(_bold(wx.StaticText(sc, label='ボタンの割り当て (profile の input)')), 0, wx.ALL, 8)
+        v.Add(_gray(wx.StaticText(sc, label='B / Y の番号はコントローラーで違うことがあります。コンフィグの LOG ▸ BTN LOG で確かめてください。')), 0, wx.LEFT | wx.BOTTOM, 8)
+        self.ch_base = wx.Choice(sc, choices=['default  (コードの既定の割り当てから始める)', 'none  (何も割り当てない状態から始める)'])
+        bh = wx.BoxSizer(wx.HORIZONTAL)
+        bh.Add(wx.StaticText(sc, label='土台 (input.base):'), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        bh.Add(self.ch_base, 0, wx.RIGHT, 10)
+        self.base_st = _gray(wx.StaticText(sc, label=''))
+        bh.Add(self.base_st, 0, wx.ALIGN_CENTER_VERTICAL)
+        v.Add(bh, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        self.lst = wx.ListCtrl(sc, style=wx.LC_REPORT | wx.LC_SINGLE_SEL, size=(-1, 390))
+        self.lst.InsertColumn(0, '入力', width=330)
+        self.lst.InsertColumn(1, '今の出力', width=460)
+        self.lst.InsertColumn(2, '変更', width=90)
+        v.Add(self.lst, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
+        self.btn_edit = wx.Button(sc, label='選んだ入力を変える…')
+        v.Add(self.btn_edit, 0, wx.ALL, 8)
+        v.Add(_gray(wx.StaticText(sc, label='「出さない」「ボタン」などで置き換えると、既定の割り当てを外して (input.unbind) 自分の割り当て (input.bindings) を足します。\n'
+                                            '「既定のまま」に戻すと、その入力の unbind と bindings を消します。')), 0, wx.LEFT | wx.BOTTOM, 8)
+        v.Add(_bold(wx.StaticText(sc, label='そのほかの割り当て (表にない入力や、表で決められない行)')), 0, wx.ALL, 8)
+        self.lst_other = wx.ListCtrl(sc, style=wx.LC_REPORT | wx.LC_SINGLE_SEL, size=(-1, 160))
+        self.lst_other.InsertColumn(0, '入力', width=200)
+        self.lst_other.InsertColumn(1, '命令', width=150)
+        self.lst_other.InsertColumn(2, 'args', width=500)
+        v.Add(self.lst_other, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
+        oh = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_add = wx.Button(sc, label='足す…')
+        self.btn_oedit = wx.Button(sc, label='直す…')
+        self.btn_odel = wx.Button(sc, label='消す')
+        for b in (self.btn_add, self.btn_oedit, self.btn_odel):
+            oh.Add(b, 0, wx.RIGHT, 6)
+        v.Add(oh, 0, wx.ALL, 8)
+        self.warn_st = wx.StaticText(sc, label='')
+        self.warn_st.SetForegroundColour(wx.Colour(*ORANGE))
+        v.Add(self.warn_st, 0, wx.LEFT | wx.BOTTOM, 8)
+        sc.SetSizer(v)
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(sc, 1, wx.EXPAND)
+        self.SetSizer(outer)
+        self.sc = sc
+        self.ch_base.Bind(wx.EVT_CHOICE, self.on_base)
+        self.btn_edit.Bind(wx.EVT_BUTTON, self.on_edit_row)
+        self.lst.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.on_edit_row)
+        self.btn_add.Bind(wx.EVT_BUTTON, lambda e: self.on_other_edit(True))
+        self.btn_oedit.Bind(wx.EVT_BUTTON, lambda e: self.on_other_edit(False))
+        self.lst_other.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self.on_other_edit(False))
+        self.btn_odel.Bind(wx.EVT_BUTTON, self.on_other_delete)
+
+    def on_model_loaded(self):
+        self.refresh()
+
+    def refresh(self):
+        """表と一覧を、今のプロファイルから作り直す (settings の trigger_button_from が変わっていることもあるので、タブを開くたびに呼ぶ)。"""
+        data = self.model.data
+        inp = data.get('input')
+        usable = inp is None or isinstance(inp, dict)
+        sel = self.lst.GetFirstSelected()
+        sel_o = self.lst_other.GetFirstSelected()
+        self.loading = True
+        try:
+            self.ch_base.SetSelection(1 if _input_base(data) == 'none' else 0)
+            raw_base = inp.get('base') if isinstance(inp, dict) else None
+            self.base_st.SetLabel("base = {!r} は知らない値です (default として動きます)".format(raw_base)
+                                  if raw_base is not None and raw_base not in INPUT_BASES else
+                                  ('トリガーのボタンの出し方: {}'.format(_button_from(data))))
+            self.ch_base.Enable(usable)
+            self.btn_edit.Enable(usable)
+            self.btn_add.Enable(usable)
+            self.lst.Freeze()
+            try:
+                self.lst.DeleteAllItems()
+                for i, (key, label) in enumerate(BIND_TABLE_ROWS):
+                    st = read_binding_state(data, key) if usable else {'text': '(input が { } の形ではありません)', 'changed': False}
+                    self.lst.InsertItem(i, label)
+                    self.lst.SetItem(i, 1, st['text'])
+                    self.lst.SetItem(i, 2, '変更あり' if st['changed'] else '既定')
+            finally:
+                self.lst.Thaw()
+            if 0 <= sel < len(BIND_TABLE_ROWS):
+                self.lst.Select(sel)
+            self.lst_other.Freeze()
+            try:
+                self.lst_other.DeleteAllItems()
+                self.other_index = []
+                for n, (idx, row) in enumerate(other_binding_rows(data) if usable else []):
+                    self.other_index.append(idx)
+                    if isinstance(row, dict):
+                        args = row.get('args')
+                        cells = (str(row.get('input', '')), str(row.get('command', '')),
+                                 json.dumps(args, ensure_ascii=False) if args is not None else '')
+                    else:
+                        cells = ('?', '', '{ } の形ではない行: {}'.format(json.dumps(row, ensure_ascii=False)))
+                    self.lst_other.InsertItem(n, cells[0])
+                    self.lst_other.SetItem(n, 1, cells[1])
+                    self.lst_other.SetItem(n, 2, cells[2])
+            finally:
+                self.lst_other.Thaw()
+            if 0 <= sel_o < len(self.other_index):
+                self.lst_other.Select(sel_o)
+            self.warn_st.SetLabel('' if usable else 'input が { } の形ではないので、ここでは編集できません')
+        finally:
+            self.loading = False
+        self.sc.Layout()
+        self.sc.FitInside()
+
+    def _changed(self, msg=None):
+        self.frame.mark_dirty()
+        if msg:
+            self.frame.set_status(msg)
+        self.refresh()
+
+    def on_base(self, event):
+        if self.loading:
+            return
+        base = INPUT_BASES[max(0, self.ch_base.GetSelection())]
+        try:
+            set_input_base(self.model.data, base)
+        except ValueError as e:
+            self.frame.set_status('土台を書けません: {}'.format(e))
+            return
+        self._changed()
+
+    def on_edit_row(self, event):
+        i = self.lst.GetFirstSelected()
+        if i < 0 or i >= len(BIND_TABLE_ROWS):
+            self.frame.set_status('先に表の行を選んでください')
+            return
+        key, label = BIND_TABLE_ROWS[i]
+        state = read_binding_state(self.model.data, key)
+        dlg = BindingDialog(self, label, key, state)
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            choice = dlg.get_choice()
+        finally:
+            dlg.Destroy()
+        try:
+            apply_binding_choice(self.model.data, key, choice)
+        except Exception as e:
+            self.frame.set_status('割り当てを書けません: {}'.format(e))
+            return
+        self._changed('{} を変えました (保存は上の「保存」で)'.format(label.split('  (')[0]))
+
+    def on_other_edit(self, is_new):
+        pos = -1 if is_new else self.lst_other.GetFirstSelected()
+        index = None
+        row = None
+        if not is_new:
+            if pos < 0 or pos >= len(self.other_index):
+                self.frame.set_status('先に下の一覧の行を選んでください')
+                return
+            index = self.other_index[pos]
+            row = _list_of(self.model.data.get('input'), 'bindings')[index]
+        dlg = RawBindingDialog(self, row)
+        try:
+            if dlg.ShowModal() != wx.ID_OK or dlg.result is None:
+                return
+            result = dlg.result
+        finally:
+            dlg.Destroy()
+        try:
+            store_other_binding(self.model.data, index, result)
+        except Exception as e:
+            self.frame.set_status('割り当てを書けません: {}'.format(e))
+            return
+        self._changed('割り当ての行を{}しました'.format('足' if is_new else '直'))
+
+    def on_other_delete(self, event):
+        pos = self.lst_other.GetFirstSelected()
+        if pos < 0 or pos >= len(self.other_index):
+            self.frame.set_status('先に下の一覧の行を選んでください')
+            return
+        delete_other_binding(self.model.data, self.other_index[pos])
+        self._changed('割り当ての行を消しました')
+
+
+# ------------------------------------------------------------------------------
+# タブ 5: パネル
 # ------------------------------------------------------------------------------
 KIND_ITEM, KIND_FOLDER, KIND_NONE, KIND_REST, KIND_EMPTY = '項目', 'フォルダ', 'NONE', 'REST', '空'
 
@@ -1616,6 +2647,8 @@ class PanelTab(wx.Panel):
         fv.Add(self.box_folder, 0, wx.EXPAND | wx.ALL, 4)
         self.box_slot = self._build_slot_box(self.form)
         fv.Add(self.box_slot, 0, wx.EXPAND | wx.ALL, 4)
+        self.box_side = self._build_side_box(self.form)
+        fv.Add(self.box_side, 0, wx.EXPAND | wx.ALL, 4)
         self.form.SetSizer(fv)
 
         self.preview_l = PreviewPanel(self)
@@ -1685,6 +2718,29 @@ class PanelTab(wx.Panel):
         self.btn_root.Bind(wx.EVT_BUTTON, self.on_make_root)
         return p
 
+    def _build_side_box(self, parent):
+        """左右のパネル全体の設定 (今は latch だけ)。"""
+        p = wx.Panel(parent)
+        v = wx.BoxSizer(wx.VERTICAL)
+        self.chk_latch = wx.CheckBox(p, label='選びを残す (latch)')
+        v.Add(self.chk_latch, 0, wx.ALL, 4)
+        v.Add(_gray(wx.StaticText(p, label='チェックあり (既定) = スティックを中央に戻しても、選んだ項目が残る。\n'
+                                           '外す = 中央に戻すと選びが消えて、前に選んでいた項目に戻る。項目ごとの latch があれば、そちらが先。')),
+              0, wx.LEFT | wx.BOTTOM, 4)
+        p.SetSizer(v)
+        self.chk_latch.Bind(wx.EVT_CHECKBOX, self.on_side_latch)
+        return p
+
+    def on_side_latch(self, event):
+        if self.loading or self.cur is None or self.cur[0] != 'side':
+            return
+        sd = get_side(self.model.data, self.cur[1], create=True)
+        if self.chk_latch.GetValue():
+            sd.pop('latch', None)       # 既定 (true) に戻す = キーを書かない
+        else:
+            sd['latch'] = False
+        self.model_changed(rebuild=False)
+
     def _build_slot_box(self, parent):
         p = wx.Panel(parent)
         v = wx.BoxSizer(wx.VERTICAL)
@@ -1692,14 +2748,22 @@ class PanelTab(wx.Panel):
         v.Add(self.slot_title, 0, wx.ALL, 4)
 
         self.row_kind, self.ch_kind = self._mk_row(p, '種類', lambda q: wx.Choice(q, choices=[KIND_ITEM]))
-        self.row_label, self.txt_label = self._mk_row(p, 'ラベル', lambda q: wx.TextCtrl(q, size=(260, -1)))
+        self.row_label, self.txt_label = self._mk_row(p, 'ラベル', lambda q: wx.TextCtrl(q, size=(170, -1)))
+        self.btn_glyph = wx.Button(self.row_label, label='印…', size=(46, -1))
+        self.btn_glyph.SetToolTip('パッドの印 ({A} など) をラベルに入れる')
+        self.row_label.GetSizer().Add(self.btn_glyph, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)
         self.lbl_hint = _gray(wx.StaticText(p, label=''))
+        self.row_glyph, self.ch_glyph = self._mk_row(
+            p, '印 (glyph)', lambda q: wx.Choice(q, choices=['(自動)', '出さない'] + GLYPH_NAMES))
+        self.lbl_glyph = _gray(wx.StaticText(p, label='自動 = ボタン番号から印を選んでラベルの横に出す。ラベルに {A} などを書いたときは自動の印は付かない。'))
         self.row_folder, self.ch_folder = self._mk_row(p, '入るフォルダ', lambda q: wx.Choice(q, choices=['']))
         self.row_cmd, self.ch_cmd = self._mk_row(
             p, '命令 (command)', lambda q: wx.Choice(q, choices=['(なし)'] + PANEL_COMMANDS))
         for r in (self.row_kind, self.row_label):
             v.Add(r, 0, wx.EXPAND | wx.ALL, 2)
         v.Add(self.lbl_hint, 0, wx.LEFT, 130)
+        v.Add(self.row_glyph, 0, wx.EXPAND | wx.ALL, 2)
+        v.Add(self.lbl_glyph, 0, wx.LEFT, 130)
         v.Add(self.row_folder, 0, wx.EXPAND | wx.ALL, 2)
         v.Add(self.row_cmd, 0, wx.EXPAND | wx.ALL, 2)
 
@@ -1743,6 +2807,8 @@ class PanelTab(wx.Panel):
 
         self.ch_kind.Bind(wx.EVT_CHOICE, self.on_kind)
         self.txt_label.Bind(wx.EVT_TEXT, self.on_form)
+        self.btn_glyph.Bind(wx.EVT_BUTTON, self.on_glyph_button)
+        self.ch_glyph.Bind(wx.EVT_CHOICE, self.on_form)
         self.ch_folder.Bind(wx.EVT_CHOICE, self.on_form)
         self.ch_cmd.Bind(wx.EVT_CHOICE, self.on_command)
         self.txt_buttons.Bind(wx.EVT_TEXT, self.on_form)
@@ -1918,6 +2984,10 @@ class PanelTab(wx.Panel):
             self.info.Show(kind not in ('folder', 'slot'))
             self.box_folder.Show(kind == 'folder')
             self.box_slot.Show(kind == 'slot')
+            self.box_side.Show(kind == 'side')
+            if kind == 'side':
+                sd = get_side(self.model.data, key[1])
+                self.chk_latch.SetValue(not (isinstance(sd, dict) and sd.get('latch') is False))
             if kind == 'side':
                 self.info.SetLabel('左パネル (left_game): フォルダを入れ子にできる。\n右パネル (right_game): 1 階層だけ。フォルダは書けません。'
                                    if key[1] == 'left' else
@@ -1961,7 +3031,11 @@ class PanelTab(wx.Panel):
         has = item is not None
         self.txt_label.ChangeValue(str(item.get('label', '')) if has else '')
         self.txt_label.Enable(has)
+        self.btn_glyph.Enable(has)
         self._update_label_hint()
+        self.row_glyph.Show(has)
+        self.lbl_glyph.Show(has)
+        self._load_glyph_choice(item.get('glyph') if has else None)
         # フォルダ
         self.ch_folder.Clear()
         names = [n for n in (get_folders(self.model.data) or {})]
@@ -2021,6 +3095,45 @@ class PanelTab(wx.Panel):
         self._set_choice(self.ch_hud, item.get('hud') if has else None, HUD_MARKS, 1)
         self.box_slot.Layout()
 
+    def _load_glyph_choice(self, value):
+        """glyph の選び: 0 = 自動 (キー無し)、1 = false、2 以降 = 印の名前。知らない値はそのまま残す行を足す。"""
+        ch = self.ch_glyph
+        while ch.GetCount() > 2 + len(GLYPH_NAMES):
+            ch.Delete(ch.GetCount() - 1)
+        if value is None:
+            ch.SetSelection(0)
+        elif value is False:
+            ch.SetSelection(1)
+        elif isinstance(value, str) and value in GLYPH_NAMES:
+            ch.SetSelection(2 + GLYPH_NAMES.index(value))
+        else:
+            ch.SetSelection(ch.Append('(不明) {}'.format(json.dumps(value, ensure_ascii=False))))
+
+    def on_glyph_button(self, event):
+        """ラベルの横の「印…」: 印の一覧を出し、選んだ印を {A} の形でカーソルの位置に入れる。"""
+        if self.cur_item is None:
+            return
+        try:
+            pos = self.txt_label.GetInsertionPoint()
+            pop = GlyphPopup(self, lambda name: self._insert_glyph(name, pos))
+            h = self.btn_glyph.GetSize()[1]
+            pop.Position(self.btn_glyph.ClientToScreen((0, h)), (0, 0))
+            pop.Popup()
+            self._glyph_popup = pop
+        except Exception as e:
+            print('[VC] 印の一覧を開けません: {}'.format(e))
+            self.frame.set_status('印の一覧を開けません: {}'.format(e))
+
+    def _insert_glyph(self, name, pos):
+        if self.cur_item is None:
+            return
+        try:
+            self.txt_label.SetInsertionPoint(min(pos, self.txt_label.GetLastPosition()))
+            self.txt_label.WriteText('{' + name + '}')      # 文字が変わるので on_form が項目に書き戻す
+            self.txt_label.SetFocus()
+        except Exception as e:
+            print('[VC] 印を入れられません: {}'.format(e))
+
     @staticmethod
     def _set_choice(ch, value, options, offset):
         if value is None:
@@ -2040,9 +3153,12 @@ class PanelTab(wx.Panel):
 
     def _update_label_hint(self):
         text = self.txt_label.GetValue()
-        bad = sorted(set(c for c in text if c not in LABEL_OK_CHARS))
+        bad = sorted(set(c for c in label_plain_chars(text) if c not in LABEL_OK_CHARS))
+        unknown = [v for k, v in split_label_tokens(text) if k == 'u']
         self.lbl_hint.SetLabel('HUD の文字で出せない字: {}'.format(' '.join(bad)[:30]) if bad else
-                               'HUD は英大文字・数字・空白 / . - + を出せます')
+                               'HUD は英大文字・数字・空白 / . - + を出せます。{A} などはパッドの印 (「印…」で入れる)')
+        if unknown:
+            self.lbl_hint.SetLabel('知らない印: {} (字として描かれます)'.format(' '.join(unknown)[:40]))
 
     # ---- フォームの変更 ----
     def on_kind(self, event):
@@ -2120,6 +3236,13 @@ class PanelTab(wx.Panel):
                 item.pop(key, None)
             else:
                 item[key] = v
+        i = self.ch_glyph.GetSelection()
+        if i == 0:
+            item.pop('glyph', None)
+        elif i == 1:
+            item['glyph'] = False
+        elif i < 2 + len(GLYPH_NAMES):
+            item['glyph'] = GLYPH_NAMES[i - 2]      # 「(不明)」の行 (それより後ろ) のときは、書いてある値をそのまま残す
         i = self.ch_hud.GetSelection()
         if i <= 0:
             item.pop('hud', None)
@@ -2360,8 +3483,8 @@ class PanelTab(wx.Panel):
                     hl_l = idx
                 elif key[1] == 'right':
                     hl_r = idx
-        self.preview_l.set_level(level_entries(data, 'left', lname), '左 ' + lname, hl_l)
-        self.preview_r.set_level(level_entries(data, 'right', 'items'), '右 items', hl_r)
+        self.preview_l.set_level(level_entries(data, 'left', lname, True), '左 ' + lname, hl_l)
+        self.preview_r.set_level(level_entries(data, 'right', 'items', True), '右 items', hl_r)
 
     def refresh_validation(self):
         problems = validate_panels(self.model.data)
@@ -2404,13 +3527,14 @@ class MainFrame(wx.Frame):
         self.cockpit_status = None      # 最後に読んだ状態 (止まっていれば None)
         self.model = ProfileModel()
         self.profile_paths = []
+        load_pad_font()                 # 印の字体を先に登録する (読めなくても落とさない)
         self.CreateStatusBar()
         self.SetMinSize((900, 600))
 
         root = wx.Panel(self)
         # コクピットの状態の帯 (どのタブでも出す)
         self.head_st = _bold(wx.StaticText(root, label=cockpit_summary(None)))
-        # プロファイルの選び (タブ 3 と 4 だけに出す)
+        # プロファイルの選び (プロファイル・ボタン・パネルのタブだけに出す)
         self.bar = wx.Panel(root)
         bh = wx.BoxSizer(wx.HORIZONTAL)
         bh.Add(wx.StaticText(self.bar, label='プロファイル:'), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
@@ -2430,11 +3554,13 @@ class MainFrame(wx.Frame):
         self.log_tab = LogTab(self.nb, self, log_path)
         self.config_tab = ConfigTab(self.nb, self)
         self.settings_tab = SettingsTab(self.nb, self)
+        self.button_tab = ButtonTab(self.nb, self)
         self.panel_tab = PanelTab(self.nb, self)
         self.nb.AddPage(self.cockpit_tab, 'コクピット')
         self.nb.AddPage(self.log_tab, 'ログ')
         self.nb.AddPage(self.config_tab, '設定')
         self.nb.AddPage(self.settings_tab, 'プロファイル')
+        self.nb.AddPage(self.button_tab, 'ボタン')
         self.nb.AddPage(self.panel_tab, 'パネル')
 
         v = wx.BoxSizer(wx.VERTICAL)
@@ -2513,8 +3639,13 @@ class MainFrame(wx.Frame):
 
     def on_page(self, event):
         page = self.nb.GetCurrentPage()
-        self.bar.Show(page is self.settings_tab or page is self.panel_tab)
+        self.bar.Show(page is self.settings_tab or page is self.button_tab or page is self.panel_tab)
         self.bar.GetParent().Layout()
+        if page is self.button_tab:
+            try:
+                self.button_tab.refresh()       # プロファイルのタブで settings を変えたあとに合わせる
+            except Exception as e:
+                self.set_status('ボタンの表を作り直せません: {}'.format(e))
         if page is self.panel_tab:
             try:
                 self.panel_tab.on_shown()
@@ -2565,6 +3696,7 @@ class MainFrame(wx.Frame):
     def after_model_load(self):
         self.update_dirty_label()
         self.settings_tab.on_model_loaded()
+        self.button_tab.on_model_loaded()
         self.panel_tab.on_model_loaded()
 
     def on_choose_profile(self, event):
