@@ -32,7 +32,9 @@ VC コンソール (vc_gui.py): PC の画面に出す設定とログの窓。別
     (SWITCH_COCKPIT_ON_CHOOSE)。起動したときは、動いているコクピットのプロファイルを開く (--profile を書いたときはそちら)。
   - パネルの項目の命令に key (キーボードのキー。欄にキーの名前を書く) と view (押している間、頭の向きを RX / RY へ) を足した。
     割り当ての命令にも key と view を足した。
-  - 設定: stick.deadzone_x/y/z (デッドゾーン)、throttle.accel_threshold (黄色の領域に入る押し込み)、throttle.rxry_output、view.*。
+  - 設定: stick.deadzone_x/y/z (デッドゾーン)、throttle.accel_threshold (黄色の領域に入る押し込み)、throttle.rxry_output、view.*、
+    panel.bg_shape (パネルの背景の形)。プロファイルのタブは見出しごとにまとめ、上の「移動」で見出しへ飛べる。
+  - コクピットの中でプロファイルを替えたら、上の欄もそれに合わせる (保存していない変更があるときは替えずに知らせる)。
 
 ■ 0.1.4 の足したもの (_joystick.py v0.1.46 の形に合わせた)
   - 「ボタン」タブ: 表の 1 行 = 物理の入力 1 つ。選ぶと unbind (既定の割り当てを外す) と bindings (自分の割り当て) を書く。
@@ -368,6 +370,8 @@ SETTING_SPECS = [
     _spec('input.trigger_button_from', 'トリガーのボタンの出し方', 'choice', 'analog',
           'analog = アナログの値の引き切り (trigger_full) でボタン 1 / 9 を押す。steamvr = SteamVR の「押した」イベント (古い出し方)。',
           choices=['analog', 'steamvr']),
+    _spec('panel.bg_shape', 'パネル: 背景の形', 'choice', 'circle',
+          'パネルの後ろの薄黒い背景。circle = 丸 (既定)、square = 四角、none = 出さない。', choices=['circle', 'square', 'none']),
     _spec('panel.glyph_side', 'パネル: 印を出す側', 'choice', 'left',
           'パネルのラベルの横に、割り当てたボタンのパッドの印を自動で出す位置。off = 出さない。', choices=GLYPH_SIDES),
     _spec('panel.glyph_map', 'パネル: ボタン番号と印の対応', 'glyphmap', GLYPH_MAP_DEFAULT,
@@ -376,6 +380,26 @@ SETTING_SPECS = [
           'コンソールのキー (ショートカット) を使う。false = キーを押しても何もしない (誤爆を防ぐ)。'),
 ]
 SETTING_KEYS = [s['key'] for s in SETTING_SPECS]
+# 0.1.5: プロファイルのタブの見出し (キーの頭の部分 → 見出し)。上から順に並べる。どれにも合わないキーは最後の「その他」へ
+SETTING_GROUPS = [
+    ('スロットル', ['throttle.']),
+    ('操縦桿 (デッドゾーン・アンチデッドゾーン)', ['stick.']),
+    ('ブレーキ', ['brake.']),
+    ('クルーズ', ['cruise.']),
+    ('VIEW (頭の向き → RX / RY)', ['view.']),
+    ('トリガー', ['input.']),
+    ('十字キーとパネル', ['dpad.', 'panel.']),
+    ('デバッグ', ['debug.']),
+]
+
+
+def setting_group_index(key):
+    for i, (_, heads) in enumerate(SETTING_GROUPS):
+        if any(key.startswith(h) for h in heads):
+            return i
+    return len(SETTING_GROUPS)
+
+
 BRAKE_ARG_SPECS = [s for s in SETTING_SPECS if s['key'].startswith('brake.')]
 KNOWN_BRAKE_ARGS = [s['key'][len('brake.'):] for s in BRAKE_ARG_SPECS]
 
@@ -1969,7 +1993,24 @@ class SettingsTab(wx.Panel):
         self.head_box.SetSizer(gs)
         v.Add(self.head_box, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         v.Add(_gray(wx.StaticText(sc, label='「プロファイルに書く」を外したキーはファイルに書かず、コードの既定 (下の既定値) で動きます。')), 0, wx.LEFT | wx.BOTTOM, 8)
-        for spec in SETTING_SPECS:
+        # 0.1.5: 見出しごとにまとめて並べ、上の「移動」で見出しへ飛ぶ (項目が増えて長くなったため)
+        jump = wx.BoxSizer(wx.HORIZONTAL)
+        jump.Add(wx.StaticText(sc, label='移動:'), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        self.ch_jump = wx.Choice(sc, choices=[g[0] for g in SETTING_GROUPS] + ['その他'])
+        jump.Add(self.ch_jump, 0)
+        v.Add(jump, 0, wx.LEFT | wx.BOTTOM, 8)
+        self.ch_jump.Bind(wx.EVT_CHOICE, self.on_jump)
+        self.group_heads = {}
+        specs = sorted(SETTING_SPECS, key=lambda s: setting_group_index(s['key']))   # sorted は安定 (同じ見出しの中は元の順)
+        last_group = None
+        for spec in specs:
+            gi = setting_group_index(spec['key'])
+            if gi != last_group:
+                last_group = gi
+                title = SETTING_GROUPS[gi][0] if gi < len(SETTING_GROUPS) else 'その他'
+                head = _bold(wx.StaticText(sc, label='■ ' + title))
+                self.group_heads[gi] = head
+                v.Add(head, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
             row = ParamRow(sc, spec, self.on_row_change)
             self.rows.append(row)
             v.Add(row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
@@ -1982,6 +2023,17 @@ class SettingsTab(wx.Panel):
         outer.Add(sc, 1, wx.EXPAND)
         self.SetSizer(outer)
         self.sc = sc
+
+    def on_jump(self, event):
+        """0.1.5: 選んだ見出しまで巻き戻す。"""
+        head = self.group_heads.get(self.ch_jump.GetSelection())
+        if head is None:
+            return
+        try:
+            y = self.sc.CalcUnscrolledPosition(head.GetPosition())[1]
+            self.sc.Scroll(0, max(0, y // 12))
+        except Exception as e:
+            self.frame.set_status('見出しへ移動できません: {}'.format(e))
 
     def on_model_loaded(self):
         settings = self.model.settings()
@@ -3718,8 +3770,34 @@ class MainFrame(wx.Frame):
                 self.head_st.SetForegroundColour(wx.Colour(*(GREEN if st else GRAY)))
                 self.head_st.GetParent().Layout()
             self.cockpit_tab.update_status(st)
+            self.follow_cockpit_profile(st)
         except Exception as e:
             self.set_status('状態を表示できません: {}'.format(e))
+
+    def follow_cockpit_profile(self, st):
+        """0.1.5: コクピットの中 (VR のコンフィグや N キー) でプロファイルが替わったら、上の欄も合わせる。
+        保存していない変更があるときは替えず、状態バーとログのタブに知らせるだけ。"""
+        cur = os.path.basename(str(st.get('profile_file'))) if st and st.get('profile_file') else None
+        last = getattr(self, '_cockpit_profile_seen', None)
+        self._cockpit_profile_seen = cur
+        if cur is None or cur == last or last is None:
+            return                          # 止まっている / 変わっていない / 最初の 1 回 (起動時は __init__ で合わせた)
+        if self.model.path and same_profile_file(self.model.path, cur):
+            return
+        if self.model.dirty:
+            msg = 'コクピットのプロファイルが {} に替わりました (保存していない変更があるので、こちらは替えていません)'.format(cur)
+            self.set_status(msg)
+            self.log_tab.add_note(msg)
+            return
+        names = list_profile_files()
+        if cur not in names:
+            return
+        self.model.path = None              # fill_profile_choice が今のファイルを優先しないように
+        self.fill_profile_choice(select_name=cur)
+        self.load_selected(ask=False)
+        msg = 'コクピットに合わせてプロファイルを {} にしました'.format(cur)
+        self.set_status(msg)
+        self.log_tab.add_note(msg)
 
     def send_cmd(self, obj):
         """コクピットへ命令を 1 行足す。結果を状態バーに出す。"""

@@ -184,13 +184,14 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
   0.1.47: AC8 での試験の結果から (2026-11-26)。
     (1) 命令 'key': パネルの項目や割り当てから、キーボードのキーを押す (SendInput、スキャンコード。KEY_SCANCODES / 'sc:0x1E')。
         AC8 の武器の直接選択が HOTAS に割り当てられていないため。"args": {"key": "1"} か {"keys": ["LSHIFT", "1"]}。
-    (2) デッドゾーン 'stick.deadzone_x/y/z' (中央付近を 0 にして残りを引き伸ばす。アンチデッドゾーンの前にかける)。コンフィグの STICK ▸ DZ YAW。
+    (2) デッドゾーン 'stick.deadzone_x/y/z' (中央付近を 0 にして残りを引き伸ばす。アンチデッドゾーンの前にかける)。コンフィグの STICK ▸ DEADZONE ▸ DZ ROLL / PITCH / YAW。
     (3) 命令 'view': 実行している間、頭の向きを vJoy の RX / RY に出す (視点の移動)。基準は 'view.ref' = hud (HUD の中心) / room (ルームの正面)、
         コンフィグの POSITION ▸ VIEW REF。'throttle.rxry_output' = false でスロットルの RX / RY を出さない。
     (4) 'throttle.accel_threshold' = 約 80% で止まったスロットルを黄色の領域へ押し込むのに要る速さ (THROTTLE_ACCEL_THRESHOLD の上書き)。
     (5) HUD の上下・中心・RECENTER (基準の目) を users/vc_user.json の 'hud.position' に保存し、次の起動で戻す。POSITION ▸ POS RESET で消す。
     (6) 前回最後に使ったプロファイルを起動時に読む ('profile.last'、INPUT_PROFILE_CONTINUE_LAST)。
     (7) パネルの見た目: 丸い線を消し (PANEL_RINGS)、境目の斜線の両端を削る (PANEL_DIVIDER_TRIM)。選んでいる扇形は暗い緑。
+        背景の形を 'panel.bg_shape' = circle (既定) / square / none で選ぶ。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -8005,7 +8006,9 @@ CONFIG_NUMBERS = {   # 名前: (小さい刻み, 大きい刻み, 下限, 上限
     'stick.anti_deadzone_z': (0.01, 0.05, 0.0, 0.5, 'pct'),
     'throttle.anti_deadzone': (0.01, 0.05, 0.0, 0.5, 'pct'),
     'stick.adz_buffer': (0.005, 0.02, 0.0, 0.2, 'pct1'),
-    'stick.deadzone_z': (0.01, 0.05, 0.0, 0.5, 'pct'),          # 0.1.47
+    'stick.deadzone_x': (0.01, 0.05, 0.0, 0.5, 'pct'),          # 0.1.47
+    'stick.deadzone_y': (0.01, 0.05, 0.0, 0.5, 'pct'),
+    'stick.deadzone_z': (0.01, 0.05, 0.0, 0.5, 'pct'),
     'throttle.accel_threshold': (0.002, 0.01, 0.0, 0.2, 'num3'),   # 0.1.47
     'brake.max': (0.05, 0.20, 0.0, 1.0, 'pct'),
     'brake.curve': (0.1, 0.5, 0.2, 5.0, 'num'),
@@ -8015,7 +8018,7 @@ CONFIG_LABELS = {'hud.mode': 'HUD MODE', 'throttle.mode': 'THR MODE', 'brake.met
                  'brake.curve': 'BRAKE CURVE', 'brake.smooth_sec': 'BRAKE SMOOTH', 'cruise.adjust': 'CRUISE ADJ',
                  'stick.anti_deadzone_x': 'ADZ ROLL', 'stick.anti_deadzone_y': 'ADZ PITCH', 'stick.anti_deadzone_z': 'ADZ YAW',
                  'throttle.anti_deadzone': 'ADZ THR', 'stick.adz_buffer': 'ADZ BUFFER', 'debug.keys': 'KEYS',
-                 'stick.deadzone_z': 'DZ YAW', 'throttle.accel_threshold': 'THR PUSH', 'view.ref': 'VIEW REF'}
+                 'stick.deadzone_x': 'DZ ROLL', 'stick.deadzone_y': 'DZ PITCH', 'stick.deadzone_z': 'DZ YAW', 'throttle.accel_threshold': 'THR PUSH', 'view.ref': 'VIEW REF'}
 
 
 def config_value_text(key, v):
@@ -8056,7 +8059,12 @@ def config_menu_folders(profiles, has_prev):
             '4': {'label': 'ADZ YAW', 'cfg': 'stick.anti_deadzone_z'},
             '5': {'label': 'ADZ THR', 'cfg': 'throttle.anti_deadzone'},
             '6': {'label': 'ADZ BUFFER', 'cfg': 'stick.adz_buffer'},
-            '7': {'label': 'DZ YAW', 'cfg': 'stick.deadzone_z'},             # 0.1.47
+            '7': {'label': 'DEADZONE', 'folder': 'deadzone'},                # 0.1.47
+        },
+        'deadzone': {                                   # 0.1.47: デッドゾーン (中央付近を 0 にする)
+            '2': {'label': 'DZ ROLL', 'cfg': 'stick.deadzone_x'},
+            '3': {'label': 'DZ PITCH', 'cfg': 'stick.deadzone_y'},
+            '4': {'label': 'DZ YAW', 'cfg': 'stick.deadzone_z'},
         },
         'throttle': {
             '2': {'label': 'THR MODE', 'cfg': 'throttle.mode'},
@@ -8433,6 +8441,9 @@ PANEL_COLOR_DIM = (130, 255, 180, 110)     # [CONFIG] (0.1.36) NONE / REST の�
 PANEL_COLOR_ERROR = (255, 0, 255, 255)     # [CONFIG] (0.1.36) エラーの NONE (書いていない番号) の色 (赤紫、Q29-1)
 PANEL_COLOR_SELECT = (0, 45, 25, 200)      # [CONFIG] (0.1.36) 選んでいる扇形の塗り。(0.1.47) 明るい緑 (130, 255, 180, 70) だと文字が読みにくいので、
                                            #   暗い緑にした (ユーザー 2026-11-26)。色を付けない暗さだけなら (0, 0, 0, 200)
+PANEL_BG_SHAPES = ('circle', 'square', 'none')
+PANEL_BG_SHAPE = 'circle'                  # [CONFIG] (0.1.47) 背景 (PANEL_BG の色) の形: 'circle' = 丸 (0.1.46 まで) / 'square' = 四角 / 'none' = 出さない。
+                                           #   プロファイルの 'panel.bg_shape' が優先 (VC コンソールで選べる。ユーザー 2026-11-26)
 PANEL_RINGS = False                        # [CONFIG] (0.1.47) 外と中心の丸い線を描く (0.1.46 までは描いていた)。SACC にならって消した (ユーザー 2026-11-26)
 PANEL_DIVIDER_TRIM = 0.10                  # [CONFIG] (0.1.47) 境目の斜線の両端を、線の長さのこの割合ずつ削る (0 = 中心の円から外の円まで)
 POV_MODE_NEEDS_EXTRA_TOUCH = True          # [CONFIG] (0.1.40) 十字キーモードに入るのは「左スティックのタッチ + POV_MODE_EXTRA_TOUCH_IDS (Y) のタッチ」のときだけ。False = 0.1.39 までと同じ (スティックのタッチかアプリメニューだけで入る)
@@ -8536,8 +8547,15 @@ def _panel_label_runs(fonts, text, fs):
     return out, w, (top or 0), (bot or 0)
 
 
-def draw_panel_image(ps, fonts, size=None):
-    """(0.1.36) PanelState の今の階層を、ラジアルのパネルの絵 (PIL の RGBA) にする。"""
+def panel_bg_shape(settings):
+    """(0.1.47) プロファイルの settings から背景の形を読む (おかしい値は既定)。"""
+    v = (settings or {}).get('panel.bg_shape', PANEL_BG_SHAPE)
+    return v if v in PANEL_BG_SHAPES else PANEL_BG_SHAPE
+
+
+def draw_panel_image(ps, fonts, size=None, bg_shape=None):
+    """(0.1.36) PanelState の今の階層を、ラジアルのパネルの絵 (PIL の RGBA) にする。
+    (0.1.47) bg_shape = 'circle' / 'square' / 'none' (None = PANEL_BG_SHAPE)。"""
     S = int(size or PANEL_TEX_PX)
     img = Image.new('RGBA', (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -8548,7 +8566,10 @@ def draw_panel_image(ps, fonts, size=None):
     lw = max(2, S // 170)
     n = ps.slot_count()
     w = 360.0 / n
-    if PANEL_BG is not None:
+    shape = bg_shape or PANEL_BG_SHAPE
+    if PANEL_BG is not None and shape == 'square':
+        d.rectangle([c - R, c - R, c + R, c + R], fill=PANEL_BG)
+    elif PANEL_BG is not None and shape != 'none':
         d.ellipse([c - R, c - R, c + R, c + R], fill=PANEL_BG)
     if ps.selected is not None and int(ps.selected) <= n:
         i = int(ps.selected) - 1
@@ -9694,10 +9715,11 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 continue
             try:
                 pos = self._panel_pos(side)
-                sig = (id(ps), tuple(ps.stack), ps.selected, pos, ps.root)
+                shape = panel_bg_shape(self.inputs.settings if self.inputs is not None else None)   # 0.1.47
+                sig = (id(ps), tuple(ps.stack), ps.selected, pos, ps.root, shape)
                 if sig == self._panel_sent.get(side):
                     continue
-                self.hud.panel_request(side, draw_panel_image(ps, self._panel_fonts), pos, PANEL_OVERLAY_WIDTH_M)
+                self.hud.panel_request(side, draw_panel_image(ps, self._panel_fonts, bg_shape=shape), pos, PANEL_OVERLAY_WIDTH_M)
                 self._panel_sent[side] = sig
             except Exception as e:
                 print("[Panel Warning] パネル {} を描けません: {}: {}".format(side, type(e).__name__, e))
