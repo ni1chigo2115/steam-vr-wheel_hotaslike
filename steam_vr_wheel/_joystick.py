@@ -4174,10 +4174,20 @@ class HudPlateOverlay(object):
             self.set_center(st.get('center', self.center), quiet=True)
             if self.far:
                 self._place()
-            print("[HUD] users/vc_user.json の HUD の位置を使います (中心 {}、上下 {:+.3f}m{})".format(
-                self.center, self._center_adj[self.center][1], '、RECENTER の目あり' if self._eye_fixed is not None else ''))
+            print("[HUD] users/vc_user.json の HUD の位置を使います (中心 {}、上下 {:+.3f}m)".format(
+                self.center, self._center_adj[self.center][1]))
         except Exception as e:
             print("[HUD] Warning: 保存した HUD の位置を使えません: {}".format(e))
+        self.log_base_eye('起動時')
+
+    def log_base_eye(self, when):
+        """(0.1.47) 基準の目 E0 のシート座標を 1 行出す (目の位置を決める参考のログ。ユーザーの決定 2026-11-25)。"""
+        try:
+            e0 = self._base_eye()
+            src = 'RECENTER で保存' if self._eye_fixed is not None else ('シート座標の原点' if self._eye_auto else 'HUD_DEPTH_EYE_OFFSET')
+            print("[HUD] {}の基準の目 E0 (シート座標) = ({:.3f}, {:.3f}, {:.3f}) ({})".format(when, e0[0], e0[1], e0[2], src))
+        except Exception as e:
+            print("[HUD] Warning: 基準の目の位置を出せません: {}".format(e))
 
     def reset_position(self):
         """保存した位置を消して、[CONFIG] の値に戻す (コンフィグの POSITION ▸ POS RESET)。"""
@@ -4209,6 +4219,7 @@ class HudPlateOverlay(object):
         if self.far:
             self._place()          # 遠いオーバーレイを新しい基準の目に合わせて置き直す
         print("[HUD] 基準の目の位置を変更: HUD_DEPTH_EYE_OFFSET = ({:.3f}, {:.3f}, {:.3f})  (users/vc_user.json に保存)".format(*off))
+        print("[HUD] 基準の目 E0 (シート座標) = ({:.3f}, {:.3f}, {:.3f})".format(*self._eye_fixed))   # 0.1.47: 起動時の行と比べる用
         self.save_position()
 
     def set_depth_distance(self, meters):
@@ -8884,6 +8895,8 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
                 self.hud.set_mode(mode)
             if isinstance(us.get('hud.position'), dict) and hasattr(self.hud, 'apply_position'):   # 0.1.47
                 self.hud.apply_position(us['hud.position'])
+            elif hasattr(self.hud, 'log_base_eye'):
+                self.hud.log_base_eye('起動時')
         g = self.cfgmode.gesture.frame(lx, ly, rx, ry, now, allowed=not self.is_pov_mode)
         if g == 'toggle' or (self._config_request and not self.cfgmode.active):
             if self._config_request:
