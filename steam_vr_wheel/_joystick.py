@@ -181,6 +181,16 @@ steam_vr_wheel/_joystick.py ― SteamVR Virtual Cockpit: VR 操縦桿 + スロ�
     (3) HUD のデバッグ用の段 (トリガーの区間・パネルの階層・フォントの確かめ・DPAD の数値) と [DPAD] のログを既定で出さない。
         段の場所は今までどおり取るので、窓の大きさ・十字・パネルの置き場所は変わらない。HUD_DEBUG_ROWS / コマンド 'hud_debug_rows'
         (コンフィグの LOG ▸ HUD DBG) で出す。
+  0.1.47: AC8 での試験の結果から (2026-11-26)。
+    (1) 命令 'key': パネルの項目や割り当てから、キーボードのキーを押す (SendInput、スキャンコード。KEY_SCANCODES / 'sc:0x1E')。
+        AC8 の武器の直接選択が HOTAS に割り当てられていないため。"args": {"key": "1"} か {"keys": ["LSHIFT", "1"]}。
+    (2) デッドゾーン 'stick.deadzone_x/y/z' (中央付近を 0 にして残りを引き伸ばす。アンチデッドゾーンの前にかける)。コンフィグの STICK ▸ DZ YAW。
+    (3) 命令 'view': 実行している間、頭の向きを vJoy の RX / RY に出す (視点の移動)。基準は 'view.ref' = hud (HUD の中心) / room (ルームの正面)、
+        コンフィグの POSITION ▸ VIEW REF。'throttle.rxry_output' = false でスロットルの RX / RY を出さない。
+    (4) 'throttle.accel_threshold' = 約 80% で止まったスロットルを黄色の領域へ押し込むのに要る速さ (THROTTLE_ACCEL_THRESHOLD の上書き)。
+    (5) HUD の上下・中心・RECENTER (基準の目) を users/vc_user.json の 'hud.position' に保存し、次の起動で戻す。POSITION ▸ POS RESET で消す。
+    (6) 前回最後に使ったプロファイルを起動時に読む ('profile.last'、INPUT_PROFILE_CONTINUE_LAST)。
+    (7) パネルの見た目: 丸い線を消し (PANEL_RINGS)、境目の斜線の両端を削る (PANEL_DIVIDER_TRIM)。選んでいる扇形は暗い緑。
   デバッグログ: print した文字はコンソール (ログとして残す) と HUD の両方に出る (sys.stdout を _HudLogTee に差し替え)。
     HUD では操作インジゲータの上に左揃え、新しい行ほど下。行数は自動 (上端がバージョン表記を越えない)。
     普通 / 大きく の2つの層を同じ場所に取り、HUD_LOG.mode に合う方だけ出す。文字はにじみなし・不透明・濃い薄板 (読みやすさ優先)。
@@ -284,7 +294,7 @@ JOY_ALIGN_TO_GRAB_HEADING = True   # つかんだ瞬間のコントローラー�
 # ==============================================================================
 APP_NAME = 'SteamVR Virtual Cockpit'       # システム名 (steam-vr-wheel を元にした操縦桿 + スロットル + HUD)。
                                            #   SACC が設計の元。仮想の物理スイッチを押すような仕組みは (今のところ) 無い
-APP_VERSION = '0.1.46'                     # このプログラムの版 (変更を配るたびに上げる)
+APP_VERSION = '0.1.47'                     # このプログラムの版 (変更を配るたびに上げる)
 APP_BASE_VERSION = '2.5.4a'                # 元にした steam-vr-wheel の版
 
 
@@ -814,8 +824,8 @@ DEBUG_KEYMAP = [                           # [CONFIG] コンソールのキー �
     ('b', 'hud_fixed_ref'),                # 検証用 (0.1.13)
     ('u', 'hud_crosshair'),                # 検証用 (0.1.13)
     ('y', 'hud_center_toggle'),            # 0.1.14: HUD の中心 低い位置 ⇔ 目の真正面
-    (',', 'hud_center_down'),              # 0.1.14: HUD を少し下へ (このセッションだけ)
-    ('.', 'hud_center_up'),                # 0.1.14: HUD を少し上へ (このセッションだけ)
+    (',', 'hud_center_down'),              # 0.1.14: HUD を少し下へ (0.1.47 から users/vc_user.json に保存)
+    ('.', 'hud_center_up'),                # 0.1.14: HUD を少し上へ (同上)
 ]
 HUD_GFX_BACKEND = 'opengl'                 # [CONFIG] 描画の裏方。今は 'opengl' だけ (D3D11 は予定。HudGfx を継承して足す)
 HUD_THREAD_HIGH_PRIORITY = True            # [CONFIG] HUD の描画スレッドの優先度を上げる (Windows)。ワールド読み込みなど CPU が重いときの遅れ・跳びを減らす。
@@ -878,7 +888,9 @@ JOY_LOG_CSV = None                  # 例: 'joy_log.csv' を指定すると、�
 # 止まらずにそのまま手の位置どおり進み、制限値以下(緑の領域)に戻るまでは自由に上下できる。超えている間はバーが黄色になる。
 THROTTLE_ACCELERATOR_LIMITTER = True   # [CONFIG] リミッターを使うか
 THROTTLE_ACCEL_LIMIT_RATIO = 0.8       # [CONFIG] 止める高さの割合 (約80%)
-THROTTLE_ACCEL_THRESHOLD = 0.018       # [CONFIG] 100%へ突破するのに必要な押し込みの速さ (1フレームあたりの移動量[m]×感度)
+THROTTLE_ACCEL_THRESHOLD = 0.018       # [CONFIG] 100%へ突破するのに必要な押し込みの速さ (1フレームあたりの移動量[m]×感度)。
+                                       #   (0.1.47) プロファイルの settings 'throttle.accel_threshold' が優先 (VC コンソールのプロファイルのタブで変えられる。
+                                       #   コンフィグメニューは THROTTLE の 2〜7 が埋まっているので入れていない)
 
 # 【将来の作業用準備】クルーズモード (指定スロットルに固定し、前後させても戻すモード)
 # オンの間はリミッターが干渉しない。
@@ -3582,6 +3594,7 @@ class HudPlateOverlay(object):
         self.center = 'eye' if str(HUD_CENTER) == 'eye' else 'low'          # 0.1.14: HUD の中心の位置
         self._center_adj = {'low': [float(v) for v in HUD_CENTER_LOW_ADJUST_M][:2],
                             'eye': [float(v) for v in HUD_CENTER_EYE_ADJUST_M][:2]}
+        self._eye_fixed = None          # 0.1.47: H (RECENTER) で決めた基準の目 E0 (シート座標)。None = HUD_DEPTH_EYE_OFFSET のとおり
         self.ss = hud_ss()
         self.mpp_base = float(HUD_METERS_PER_PIXEL) / self.ss      # 内部の絵の 1px の実寸
         self.mpp = self.mpp_base * float(HUD_SCALE)       # 1px の実寸 (拡大縮小込み)
@@ -4066,7 +4079,10 @@ class HudPlateOverlay(object):
             self.y = float(y)
         if z is not None:
             self.z = float(z)
-        if self._eye_auto:
+        if self._eye_fixed is not None:                             # 0.1.47: RECENTER で決めた目を空間に止めたまま
+            e0 = self._eye_fixed
+            self.depth.eye_offset = (e0[0] - self.x, e0[1] - self.y, e0[2] - self.z)
+        elif self._eye_auto:
             self.depth.eye_offset = self._default_eye_offset()     # 基準の目はシート座標の原点のまま
         if self.initialized:
             try:
@@ -4077,7 +4093,10 @@ class HudPlateOverlay(object):
 
     # ---------------------------------------------------------------- HUD の中心の位置 (0.1.14)
     def _base_eye(self):
-        """基準の目 E0 (シート座標)。HUD を動かしても E0 は動かさない (HUD_PLATE_POS + HUD_DEPTH_EYE_OFFSET か、シート座標の原点)。"""
+        """基準の目 E0 (シート座標)。HUD を動かしても E0 は動かさない (HUD_PLATE_POS + HUD_DEPTH_EYE_OFFSET か、シート座標の原点)。
+        (0.1.47) RECENTER で決めた目 (_eye_fixed。users/vc_user.json に保存) があれば、それ。"""
+        if self._eye_fixed is not None:
+            return tuple(self._eye_fixed)
         if self._eye_auto:
             return (0.0, 0.0, 0.0)
         eo = HUD_DEPTH_EYE_OFFSET
@@ -4114,6 +4133,7 @@ class HudPlateOverlay(object):
         if not quiet:
             print("[HUD] HUD の中心: {}".format(
                 "目の真正面 (SACC と同じ。VR 向け)" if self.center == 'eye' else "低い位置 (HUD_PLATE_POS。フラットのゲーム向け)"))
+            self.save_position()            # 0.1.47
 
     def nudge_center(self, dy):
         """今の中心の位置を上下に dy [m] 動かす (, / . キー。このセッションだけ)。固定する値をコンソールに出す。"""
@@ -4121,8 +4141,56 @@ class HudPlateOverlay(object):
         adj[1] += dy
         x, y = self._center_target(self.center)
         self._move_keep_eye(x, y)
-        print("[HUD] HUD を{} {:.3f}m: HUD_CENTER_{}_ADJUST_M = ({:.3f}, {:.3f}) (固定するなら [CONFIG] に記入)".format(
+        print("[HUD] HUD を{} {:.3f}m: HUD_CENTER_{}_ADJUST_M = ({:.3f}, {:.3f}) (users/vc_user.json に保存)".format(
             "上へ" if dy > 0 else "下へ", abs(dy), 'EYE' if self.center == 'eye' else 'LOW', adj[0], adj[1]))
+        self.save_position()
+
+    # ---------------------------------------------------------------- (0.1.47) HUD の位置の保存
+    # HUD の上下 (, / . キー、コンフィグの POSITION ▸ HUD UP / DOWN)、中心 (Y、HUD CENTER)、基準の目 (H、RECENTER) を
+    # users/vc_user.json の 'hud.position' に保存し、次の起動で戻す (0.1.46 までは、このセッションだけだった。ユーザーの依頼 2026-11-26)。
+    #   {"center": "low" / "eye", "adjust": {"low": [右, 上], "eye": [右, 上]}, "eye": [x, y, z] (シート座標の E0) か null}
+    def position_state(self):
+        return {'center': self.center,
+                'adjust': {'low': [round(v, 4) for v in self._center_adj['low']], 'eye': [round(v, 4) for v in self._center_adj['eye']]},
+                'eye': [round(v, 4) for v in self._eye_fixed] if self._eye_fixed is not None else None}
+
+    def save_position(self):
+        try:
+            save_user_setting('hud.position', self.position_state(), None)
+        except Exception as e:
+            print("[HUD] Warning: HUD の位置を保存できません: {}".format(e))
+
+    def apply_position(self, st):
+        """保存した 'hud.position' を効かせる (起動のあと 1 回)。おかしい値は使わない。"""
+        try:
+            adj = st.get('adjust') or {}
+            for k in ('low', 'eye'):
+                if isinstance(adj.get(k), list) and len(adj[k]) == 2:
+                    self._center_adj[k] = [float(adj[k][0]), float(adj[k][1])]
+            eye = st.get('eye')
+            if isinstance(eye, list) and len(eye) == 3:
+                self._eye_fixed = tuple(float(v) for v in eye)
+            self.set_center(st.get('center', self.center), quiet=True)
+            if self.far:
+                self._place()
+            print("[HUD] users/vc_user.json の HUD の位置を使います (中心 {}、上下 {:+.3f}m{})".format(
+                self.center, self._center_adj[self.center][1], '、RECENTER の目あり' if self._eye_fixed is not None else ''))
+        except Exception as e:
+            print("[HUD] Warning: 保存した HUD の位置を使えません: {}".format(e))
+
+    def reset_position(self):
+        """保存した位置を消して、[CONFIG] の値に戻す (コンフィグの POSITION ▸ POS RESET)。"""
+        self._center_adj = {'low': [float(v) for v in HUD_CENTER_LOW_ADJUST_M][:2],
+                            'eye': [float(v) for v in HUD_CENTER_EYE_ADJUST_M][:2]}
+        self._eye_fixed = None
+        self.depth.eye_offset = self._default_eye_offset()
+        self.set_center('eye' if str(HUD_CENTER) == 'eye' else 'low', quiet=True)
+        self._map_key = None
+        try:
+            save_user_setting('hud.position', None, None, remove=True)
+        except Exception:
+            pass
+        print("[HUD] HUD の位置を既定に戻しました (保存も消しました)")
 
     # ---------------------------------------------------------------- 奥行きの操作
     def recenter_depth(self):
@@ -4135,10 +4203,12 @@ class HudPlateOverlay(object):
             print("[HUD] 頭の位置がまだ取れていません")
             return
         self.depth.eye_offset = off
+        self._eye_fixed = (self.x + off[0], self.y + off[1], self.z + off[2])   # 0.1.47: HUD を上下しても目は止めたまま。保存する
         self._map_key = None
         if self.far:
             self._place()          # 遠いオーバーレイを新しい基準の目に合わせて置き直す
-        print("[HUD] 基準の目の位置を変更: HUD_DEPTH_EYE_OFFSET = ({:.3f}, {:.3f}, {:.3f})  (固定するなら [CONFIG] に記入)".format(*off))
+        print("[HUD] 基準の目の位置を変更: HUD_DEPTH_EYE_OFFSET = ({:.3f}, {:.3f}, {:.3f})  (users/vc_user.json に保存)".format(*off))
+        self.save_position()
 
     def set_depth_distance(self, meters):
         """HUD の奥行き [m] を実行中に変える。"""
@@ -5809,7 +5879,8 @@ class Throttle():
                         self._last_delta = delta
 
                         if new_z > target_limit:
-                            if velocity < THROTTLE_ACCEL_THRESHOLD and self.throttle_z <= target_limit + 0.001:
+                            thr = getattr(self, 'accel_threshold', THROTTLE_ACCEL_THRESHOLD)   # 0.1.47: 'throttle.accel_threshold'
+                            if velocity < thr and self.throttle_z <= target_limit + 0.001:
                                 new_z = target_limit
                             else:
                                 # 勢いが足りているので、100%に飛ばさずアナログ操作のまま突破させる (緑に戻るまで自由)
@@ -6101,6 +6172,10 @@ class InputBus(object):
 #   'vjoy_axis'        入力の値 (0.0〜1.0) を vJoy の軸 args['axis'] (HID_USAGE_* の名前) に出す。0x8000 倍して int
 #   'vjoy_dpad'        (0.1.22) 'right.stick_dir' と 'left.pov_mode' から、POV args['pov'] か ボタン args['buttons'] (上 下 左 右) を出す。
 #                      中身は Joystick._dpad_output (0.1.21 までの十字キーの出し方そのまま)。2 つの入力の両方に同じ行を割り当てる
+#   'key'              (0.1.47) 入力が True の間、キーボードのキー args['key'] (KEY_SCANCODES の名前、または 'sc:0x1E' の形) を押す。
+#                      args['keys'] = [...] なら同時押し (書いた順に押して、逆の順に離す)。Windows の SendInput にスキャンコードで送る
+#                      (DirectInput で読むゲームにも届く)。ゲームの窓が前にないと届かない。AC8 の武器の直接選択用 (HOTAS の割り当てが無いので)。
+#   'view'             (0.1.47) 入力が True の間、頭の向きを vJoy の RX / RY に出す (Joystick._view_rxry。基準は 'view.ref')。args は無し。
 #   どの命令も、バスへの経路の名前は 'in:' + 入力の名前 (bus_status で見える)。
 INPUT_BINDINGS_ENABLED = True              # [CONFIG] (0.1.21) True = 生の入力を InputLayer に通す / False = 0.1.20 まで (VirtualPad が vJoy へ書く。比べる用)
 
@@ -6173,6 +6248,21 @@ def default_input_bindings(button_from=None):
 #     入力そのものは名前つきの入力として残る (仮想化したまま、ゲームへの元の出力だけを止める)。
 INPUT_PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'profiles')   # プロファイルの置き場所
 INPUT_PROFILE_FILE = 'default.json'        # [CONFIG] (0.1.25) 起動時に読むプロファイル (INPUT_PROFILE_DIR の中のファイル名、またはフルパス)。None = 読まずにコードの既定
+INPUT_PROFILE_CONTINUE_LAST = True         # [CONFIG] (0.1.47) True = 前回最後に使ったプロファイル (users/vc_user.json の 'profile.last') を起動時に読む。
+                                           #   そのファイルが profiles/ に無いときは INPUT_PROFILE_FILE。False = 0.1.46 まで (いつも INPUT_PROFILE_FILE)
+
+
+def startup_profile_file():
+    """(0.1.47) 起動時に読むプロファイルのファイル名 (前回のものを引き継ぐ)。"""
+    if INPUT_PROFILE_CONTINUE_LAST:
+        try:
+            last = load_user_settings(None).get('profile.last')
+            if last and os.path.exists(os.path.join(INPUT_PROFILE_DIR, os.path.basename(str(last)))):
+                print("[Input] 前回のプロファイル {} を読みます (users/vc_user.json の profile.last)".format(last))
+                return os.path.basename(str(last))
+        except Exception as e:
+            print("[Input] Warning: 前回のプロファイルを調べられません: {}".format(e))
+    return INPUT_PROFILE_FILE
 
 
 def load_input_profile(path):
@@ -6532,7 +6622,7 @@ PANEL_STICK_RELEASE = 0.45   # [CONFIG] (0.1.35) 一度倒したあと、これ�
 PANEL_PRESS_SEC = 0.10       # [CONFIG] (0.1.34) パネルの項目でボタンを出すとき、押している時間 [秒] (0.1.41: 押しっぱなしのときは、これが最短の時間)
 PANEL_ITEM_HOLD = True       # [CONFIG] (0.1.41) True = 実行した操作 (トリガーの半押し / スティックを倒したまま) を続けている間、項目のボタンを押したままにする。
                              #   False = 0.1.40 まで (PANEL_PRESS_SEC だけ押して離す)。項目ごとに "hold": true / false でも決められる
-PANEL_ITEM_COMMANDS = ('vjoy_button', 'brake', 'cruise', 'config')   # (0.1.34) パネルの項目に書ける命令 (0.1.42: 'brake' と 'cruise' は DriveAssist。0.1.43: 'config' = コンフィグモードへ)
+PANEL_ITEM_COMMANDS = ('vjoy_button', 'brake', 'cruise', 'config', 'key', 'view')   # (0.1.34) パネルの項目に書ける命令 (0.1.42: 'brake' と 'cruise' は DriveAssist。0.1.43: 'config' = コンフィグモードへ。0.1.47: 'key' = キーボード、'view' = 頭の向きを RX / RY へ)
 PANEL_ITEM_HUD_MARKS = ('mnvr', 'brake')  # (0.1.42) 項目の "hud" に書ける印 (そのボタンを押している間 'sig:<印>' が入る)
 
 
@@ -6677,12 +6767,140 @@ class TriggerState(object):
         return '戻り'
 
 
+# --- (0.1.47) キーボードへの出力 (命令 'key') -----------------------------------------------------------------
+# ゲームによっては、HOTAS (vJoy) に割り当てられない操作がキーボードにだけある (AC8 の武器の直接選択、ユーザーの試験 2026-11-26)。
+# そのため、パネルの項目や割り当てから、キーボードのキーを押せるようにした。Windows の SendInput に、仮想キーでなくスキャンコードで送る。
+# 押しているキーは KeyboardOut が数えていて、同じキーを 2 か所から押しても、両方が離すまで離さない。release_all で全部離す。
+KEY_SCANCODES = {   # [CONFIG] (0.1.47) キーの名前 → (スキャンコード, 拡張キーか)。名前は大文字・小文字を区別しない
+    'ESC': (0x01, False), '1': (0x02, False), '2': (0x03, False), '3': (0x04, False), '4': (0x05, False),
+    '5': (0x06, False), '6': (0x07, False), '7': (0x08, False), '8': (0x09, False), '9': (0x0A, False), '0': (0x0B, False),
+    'MINUS': (0x0C, False), 'EQUALS': (0x0D, False), 'BACKSPACE': (0x0E, False), 'TAB': (0x0F, False),
+    'Q': (0x10, False), 'W': (0x11, False), 'E': (0x12, False), 'R': (0x13, False), 'T': (0x14, False), 'Y': (0x15, False),
+    'U': (0x16, False), 'I': (0x17, False), 'O': (0x18, False), 'P': (0x19, False), 'LBRACKET': (0x1A, False), 'RBRACKET': (0x1B, False),
+    'ENTER': (0x1C, False), 'LCTRL': (0x1D, False), 'A': (0x1E, False), 'S': (0x1F, False), 'D': (0x20, False), 'F': (0x21, False),
+    'G': (0x22, False), 'H': (0x23, False), 'J': (0x24, False), 'K': (0x25, False), 'L': (0x26, False), 'SEMICOLON': (0x27, False),
+    'APOSTROPHE': (0x28, False), 'GRAVE': (0x29, False), 'LSHIFT': (0x2A, False), 'BACKSLASH': (0x2B, False),
+    'Z': (0x2C, False), 'X': (0x2D, False), 'C': (0x2E, False), 'V': (0x2F, False), 'B': (0x30, False), 'N': (0x31, False),
+    'M': (0x32, False), 'COMMA': (0x33, False), 'PERIOD': (0x34, False), 'SLASH': (0x35, False), 'RSHIFT': (0x36, False),
+    'NUMPAD_MULTIPLY': (0x37, False), 'LALT': (0x38, False), 'SPACE': (0x39, False), 'CAPSLOCK': (0x3A, False),
+    'F1': (0x3B, False), 'F2': (0x3C, False), 'F3': (0x3D, False), 'F4': (0x3E, False), 'F5': (0x3F, False), 'F6': (0x40, False),
+    'F7': (0x41, False), 'F8': (0x42, False), 'F9': (0x43, False), 'F10': (0x44, False), 'F11': (0x57, False), 'F12': (0x58, False),
+    'NUMPAD7': (0x47, False), 'NUMPAD8': (0x48, False), 'NUMPAD9': (0x49, False), 'NUMPAD_MINUS': (0x4A, False),
+    'NUMPAD4': (0x4B, False), 'NUMPAD5': (0x4C, False), 'NUMPAD6': (0x4D, False), 'NUMPAD_PLUS': (0x4E, False),
+    'NUMPAD1': (0x4F, False), 'NUMPAD2': (0x50, False), 'NUMPAD3': (0x51, False), 'NUMPAD0': (0x52, False), 'NUMPAD_PERIOD': (0x53, False),
+    'NUMPAD_ENTER': (0x1C, True), 'RCTRL': (0x1D, True), 'NUMPAD_DIVIDE': (0x35, True), 'RALT': (0x38, True),
+    'HOME': (0x47, True), 'UP': (0x48, True), 'PGUP': (0x49, True), 'LEFT': (0x4B, True), 'RIGHT': (0x4D, True),
+    'END': (0x4F, True), 'DOWN': (0x50, True), 'PGDN': (0x51, True), 'INSERT': (0x52, True), 'DELETE': (0x53, True),
+}
+
+
+def key_scancode(name):
+    """(0.1.47) キーの名前 → (スキャンコード, 拡張キーか)。'sc:0x1E' / 'sc:0xE048' (E0 = 拡張) の形も書ける。知らない名前は None。"""
+    s = str(name).strip().upper()
+    if s.startswith('SC:'):
+        try:
+            v = int(s[3:], 0)
+        except ValueError:
+            return None
+        if 0 < v <= 0xFF:
+            return (v, False)
+        if 0xE000 < v <= 0xE0FF:
+            return (v & 0xFF, True)
+        return None
+    return KEY_SCANCODES.get(s)
+
+
+class KeyboardOut(object):
+    """(0.1.47) キーボードのキーを押す / 離す (Windows の SendInput、スキャンコード)。Windows 以外では何もしない (警告を 1 回)。"""
+
+    def __init__(self):
+        self._held = {}            # (スキャンコード, 拡張) → 押している数
+        self._send = None
+        self._warned = False
+        try:
+            import ctypes
+            from ctypes import wintypes
+            ULONG_PTR = ctypes.c_size_t
+
+            class KEYBDINPUT(ctypes.Structure):
+                _fields_ = [('wVk', wintypes.WORD), ('wScan', wintypes.WORD), ('dwFlags', wintypes.DWORD),
+                            ('time', wintypes.DWORD), ('dwExtraInfo', ULONG_PTR)]
+
+            class MOUSEINPUT(ctypes.Structure):       # 共用体の大きさを合わせるためだけ (いちばん大きい)
+                _fields_ = [('dx', wintypes.LONG), ('dy', wintypes.LONG), ('mouseData', wintypes.DWORD),
+                            ('dwFlags', wintypes.DWORD), ('time', wintypes.DWORD), ('dwExtraInfo', ULONG_PTR)]
+
+            class _U(ctypes.Union):
+                _fields_ = [('ki', KEYBDINPUT), ('mi', MOUSEINPUT)]
+
+            class INPUT(ctypes.Structure):
+                _fields_ = [('type', wintypes.DWORD), ('u', _U)]
+
+            user32 = ctypes.windll.user32
+            self._ctypes, self._INPUT, self._KEYBDINPUT, self._user32 = ctypes, INPUT, KEYBDINPUT, user32
+            self._send = user32.SendInput
+        except Exception as e:
+            self._why = str(e)
+
+    def _post(self, code, ext, down):
+        if self._send is None:
+            if not self._warned:
+                self._warned = True
+                print("[Key] Warning: キーボードへ出せません (Windows の SendInput が使えない: {})".format(getattr(self, '_why', '?')))
+            return False
+        flags = 0x0008 | (0x0001 if ext else 0) | (0 if down else 0x0002)   # SCANCODE | EXTENDEDKEY | KEYUP
+        try:
+            inp = self._INPUT(type=1)                   # INPUT_KEYBOARD
+            inp.u.ki = self._KEYBDINPUT(0, code, flags, 0, 0)
+            n = self._send(1, self._ctypes.byref(inp), self._ctypes.sizeof(inp))
+            if n != 1 and not self._warned:
+                self._warned = True
+                print("[Key] Warning: SendInput が 0 を返しました (別のアプリに止められたかもしれない)")
+            return n == 1
+        except Exception as e:
+            if not self._warned:
+                self._warned = True
+                print("[Key] Warning: キーを送れません: {}".format(e))
+            return False
+
+    def set(self, sc, down):
+        """sc = key_scancode() の結果。押している数を数えて、0 → 1 で押し、1 → 0 で離す。"""
+        n = self._held.get(sc, 0)
+        if down:
+            self._held[sc] = n + 1
+            if n == 0:
+                self._post(sc[0], sc[1], True)
+        elif n > 0:
+            if n == 1:
+                del self._held[sc]
+                self._post(sc[0], sc[1], False)
+            else:
+                self._held[sc] = n - 1
+
+    def release_all(self):
+        for sc in list(self._held):
+            self._post(sc[0], sc[1], False)
+        self._held = {}
+
+
+KEYBOARD_OUT = KeyboardOut()
+
+
+def key_args_names(args):
+    """(0.1.47) 命令 'key' の args から、キーの名前の一覧 (押す順) を返す。"""
+    if isinstance(args.get('keys'), list):
+        return [str(k) for k in args['keys']]
+    if 'key' in args:
+        return [str(args['key'])]
+    return []
+
+
 _ZONE_BUTTONS = {'left': [4, 5, 6, 7, 8], 'right': [12, 13, 14, 15, 16]}   # VirtualPad の区画ボタン (unpressed_*_trackpad と同じ)
 
 
 class InputLayer(object):
     """生の入力 → 名前つきの入力 → 割り当て → 命令 → バス (上の説明を参照)。owner は Joystick (config と区画の計算に使う)。"""
-    COMMANDS = ['vjoy_button', 'vjoy_zone_button', 'vjoy_axis', 'vjoy_dpad', 'panel_execute']   # 命令の一覧 (中身は _cmd_<名前>)
+    COMMANDS = ['vjoy_button', 'vjoy_zone_button', 'vjoy_axis', 'vjoy_dpad', 'panel_execute', 'key', 'view']   # 命令の一覧 (中身は _cmd_<名前>。0.1.47: 'key'、'view')
 
     def __init__(self, owner, bus, bindings=None, profile=None):
         """bindings = 割り当ての一覧 (無ければ profile、それも無ければコードの既定)。profile = load_input_profile() の結果か None。"""
@@ -6771,7 +6989,8 @@ class InputLayer(object):
         for due, cmd, name, args, hold, mark in list(getattr(self, '_panel_releases', [])):
             try:
                 getattr(self, '_cmd_' + cmd)(name, False, args)
-                print("[Panel] {}: vJoy ボタン {} を離す (コンフィグへ)".format(name.replace('panel.', '', 1).replace('.', ' ', 1), args.get('button')))
+                what = ('キーボード ' + '+'.join(key_args_names(args))) if cmd == 'key' else 'VIEW' if cmd == 'view' else 'vJoy ボタン {}'.format(args.get('button'))   # 0.1.47
+                print("[Panel] {}: {} を離す (コンフィグへ)".format(name.replace('panel.', '', 1).replace('.', ' ', 1), what))
             except Exception as e:
                 print("[Panel] Warning: {} を離せません: {}".format(name, e))
         self._panel_releases = []
@@ -6783,6 +7002,7 @@ class InputLayer(object):
         for name in sorted(self.values.keys()):
             if self.values[name] is True:
                 self.set(name, False)
+        KEYBOARD_OUT.release_all()      # 0.1.47: キーボードのキーも離す (押したままにしない)
 
     # --- 生の入力の入口 (Joystick が wheel.py のイベントと毎フレームの値から呼ぶ) ---
     def button_name(self, hand, button):
@@ -7011,7 +7231,7 @@ class InputLayer(object):
             except Exception as e:
                 print("[Panel] Warning: {} の {} を実行できません: {}".format(side, slot, e))
                 continue
-            pressed.append(a.get('button'))
+            pressed.append('+'.join(key_args_names(a)) if cmd == 'key' else 'VIEW' if cmd == 'view' else a.get('button'))
             hold = (how, side, slot) if hold_on else None   # 0.1.41
             self._panel_releases.append((time.time() + PANEL_PRESS_SEC, cmd, name, a, hold, mark))
             if mark:
@@ -7022,6 +7242,10 @@ class InputLayer(object):
             until = 'トリガーを戻すまで' if how == 'trigger' else 'スティックを戻すまで'
         else:
             until = '{:.1f} 秒'.format(PANEL_PRESS_SEC)
+        if cmd == 'key':
+            return 'キーボード {} を押す ({}。vJoy へは出さない)'.format(' + '.join(str(b) for b in pressed), until)   # 0.1.47
+        if cmd == 'view':
+            return '頭の向きを vJoy の RX / RY に出す ({})'.format(until)   # 0.1.47
         return 'vJoy ボタン {} を押す ({})'.format(' + '.join(str(b) for b in pressed), until)
 
     def _panel_still_held(self, hold):
@@ -7047,7 +7271,8 @@ class InputLayer(object):
                 continue
             try:
                 getattr(self, '_cmd_' + cmd)(name, False, args)
-                print("[Panel] {}: vJoy ボタン {} を離す".format(name.replace('panel.', '', 1).replace('.', ' ', 1), args.get('button')))   # 0.1.42
+                what = ('キーボード ' + '+'.join(key_args_names(args))) if cmd == 'key' else 'VIEW' if cmd == 'view' else 'vJoy ボタン {}'.format(args.get('button'))   # 0.1.47
+                print("[Panel] {}: {} を離す".format(name.replace('panel.', '', 1).replace('.', ' ', 1), what))   # 0.1.42
             except Exception as e:
                 print("[Panel] Warning: {} を離せません: {}".format(name, e))
             if mark:                                                    # 0.1.42: HUD の印は離してから少し残す
@@ -7126,6 +7351,31 @@ class InputLayer(object):
             if need and not getattr(self.owner.config, need):
                 return
         self.bus.set_button(args['button'], bool(value), 'in:' + name)
+
+    def _cmd_key(self, name, value, args):
+        """(0.1.47) 命令 'key': キーボードのキーを押す / 離す (KeyboardOut)。押すときは書いた順、離すときは逆の順。"""
+        names = key_args_names(args)
+        if not value:
+            names = list(reversed(names))
+        for k in names:
+            sc = key_scancode(k)
+            if sc is None:
+                print("[Key] Warning: 知らないキーの名前です ({}: {!r})。KEY_SCANCODES の名前か 'sc:0x1E' の形で書く".format(name, k))
+                continue
+            KEYBOARD_OUT.set(sc, bool(value))
+
+    def _cmd_view(self, name, value, args):
+        """(0.1.47) 命令 'view': True の間、頭の向きを RX / RY に出す (Joystick._view_rxry が毎フレーム読む)。"""
+        holders = getattr(self.owner, '_view_holders', None)
+        if holders is None:
+            holders = self.owner._view_holders = set()
+        was = bool(holders)
+        if value:
+            holders.add(name)
+        else:
+            holders.discard(name)
+        if was != bool(holders):
+            print("[View] 頭の向きを RX / RY に{}".format('出します' if holders else '出すのをやめました'))
 
     def _cmd_panel_execute(self, name, value, args):
         """(0.1.33) 命令 'panel_execute': 入力が成り立ったとき、args['panel'] のパネルで選んでいる項目を実行する。
@@ -7251,6 +7501,24 @@ STICK_ANTI_DEADZONE_Y = 0.0                # [CONFIG] (0.1.45) 操縦桿の前�
 STICK_ANTI_DEADZONE_Z = 0.0                # [CONFIG] (0.1.45) 操縦桿のひねり (ヨー、vJoy Z)。'stick.anti_deadzone_z'
 THROTTLE_ANTI_DEADZONE = 0.0               # [CONFIG] (0.1.45) スロットル (vJoy RZ、B モードのアクセル SL0)。'throttle.anti_deadzone'
 STICK_ADZ_BUFFER = 0.02                    # [CONFIG] (0.1.45) これより小さい入力は 0 のまま (0〜0.2)。'stick.adz_buffer'
+# (0.1.47) デッドゾーン: こちら側で、中央付近の小さな倒し (ひねり) を 0 にする。残りは 0 から 1 に引き伸ばす (端の値は変わらない)。
+#   アンチデッドゾーンとは逆の働き。AC8 で MOD を入れないとヨーがすぐ入ってしまったため (ユーザーの試験 2026-11-26)。
+#   アンチデッドゾーンと両方かけたときは、先にデッドゾーン、そのあとアンチデッドゾーン。カーブはかけない (ユーザー: 今は要らない)。
+STICK_DEADZONE_X = 0.0                     # [CONFIG] (0.1.47) 操縦桿の左右 (ロール、vJoy X)。0〜0.5。'stick.deadzone_x'
+STICK_DEADZONE_Y = 0.0                     # [CONFIG] (0.1.47) 操縦桿の前後 (ピッチ、vJoy Y)。'stick.deadzone_y'
+STICK_DEADZONE_Z = 0.0                     # [CONFIG] (0.1.47) 操縦桿のひねり (ヨー、vJoy Z)。'stick.deadzone_z'
+
+
+def deadzone_centered(v, dz):
+    """(0.1.47) 中央 0.5 の軸 (0〜1) にデッドゾーンをかける (中央から dz 以内は 0.5、その外は端まで引き伸ばす)。"""
+    if dz <= 0.0:
+        return v
+    d = (float(v) - 0.5) * 2.0
+    a = abs(d)
+    if a <= dz:
+        return 0.5
+    a = min(1.0, (a - dz) / max(1e-6, 1.0 - dz))
+    return 0.5 + (a if d > 0 else -a) / 2.0
 
 
 def anti_deadzone_centered(v, adz, buf):
@@ -7275,6 +7543,19 @@ def anti_deadzone_one_sided(v, adz, buf):
     return adz + (1.0 - adz) * min(1.0, (v - buf) / max(1e-6, 1.0 - buf))
 
 
+# (0.1.47) VIEW: パネルの項目 (命令 'view') を実行している間 (押しっぱなしの間)、頭の向きを vJoy の RX / RY に出す (視点の移動)。
+#   AC8 のカットシーンなどで、アナログスティックの視点移動が効かないときの代わり (ユーザーの案 2026-11-26)。離すと RX / RY は元に戻る。
+#   スロットルの RX (左手のひねり) / RY (左手の前後) は、THROTTLE_RXRY_OUTPUT = False で出さなくできる (そのとき RX / RY は中央)。
+#   スロットルの角度を使うアクションは「気が向いたら」(ユーザー)。今は作っていない。
+THROTTLE_RXRY_OUTPUT = True                # [CONFIG] (0.1.47) スロットルの RX / RY を vJoy へ出すか (0.1.46 までは常に出していた)。'throttle.rxry_output'
+VIEW_REFS = ('hud', 'room')
+VIEW_REF = 'hud'                           # [CONFIG] (0.1.47) 頭の向きの基準: 'hud' = 基準の目から HUD の中心を見た向きが 0 /
+                                           #   'room' = ルームの正面 (SteamVR の着座位置のリセットで決まる向き) が 0。'view.ref'
+VIEW_RANGE_YAW_DEG = 90.0                  # [CONFIG] (0.1.47) 頭を左右にこの角度向けたら RX が端 (0 か 1)。'view.range_yaw_deg'
+VIEW_RANGE_PITCH_DEG = 60.0                # [CONFIG] (0.1.47) 頭を上下にこの角度向けたら RY が端。'view.range_pitch_deg'
+VIEW_DEADZONE_DEG = 3.0                    # [CONFIG] (0.1.47) この角度までの向きは 0 (中央) にする。'view.deadzone_deg'
+VIEW_INVERT_X = False                      # [CONFIG] (0.1.47) True = 右を向くと RX が小さくなる。'view.invert_x'
+VIEW_INVERT_Y = False                      # [CONFIG] (0.1.47) True = 上を向くと RY が小さくなる (既定は上で大きくなる)。'view.invert_y'
 CRUISE_ADJUST = 'temporary'                # [CONFIG] (0.1.43) クルーズ中にスロットルをつかんで動かしたとき: 'temporary' = つかんでいる間だけレバーの値
                                            #   (離すとクルーズの値に戻る) / 'set' = 離したところを新しいクルーズの値にする / 'locked' = 動かしても変わらない。'cruise.adjust'
 THROTTLE_MODES = ('A', 'B')
@@ -7303,6 +7584,17 @@ DRIVE_ASSIST_SETTINGS = [   # (settings の名前, [CONFIG] の変数名, 種類
     ('stick.anti_deadzone_z', 'STICK_ANTI_DEADZONE_Z', 'float', 0.0, 0.5, None),
     ('throttle.anti_deadzone', 'THROTTLE_ANTI_DEADZONE', 'float', 0.0, 0.5, None),
     ('stick.adz_buffer', 'STICK_ADZ_BUFFER', 'float', 0.0, 0.2, None),
+    ('stick.deadzone_x', 'STICK_DEADZONE_X', 'float', 0.0, 0.5, None),              # 0.1.47
+    ('stick.deadzone_y', 'STICK_DEADZONE_Y', 'float', 0.0, 0.5, None),
+    ('stick.deadzone_z', 'STICK_DEADZONE_Z', 'float', 0.0, 0.5, None),
+    ('throttle.accel_threshold', 'THROTTLE_ACCEL_THRESHOLD', 'float', 0.0, 0.2, None),   # 0.1.47: 黄色の領域に入る押し込みの速さ
+    ('throttle.rxry_output', 'THROTTLE_RXRY_OUTPUT', 'bool', None, None, None),          # 0.1.47: VIEW
+    ('view.ref', 'VIEW_REF', 'choice', None, None, VIEW_REFS),
+    ('view.range_yaw_deg', 'VIEW_RANGE_YAW_DEG', 'float', 10.0, 180.0, None),
+    ('view.range_pitch_deg', 'VIEW_RANGE_PITCH_DEG', 'float', 10.0, 90.0, None),
+    ('view.deadzone_deg', 'VIEW_DEADZONE_DEG', 'float', 0.0, 30.0, None),
+    ('view.invert_x', 'VIEW_INVERT_X', 'bool', None, None, None),
+    ('view.invert_y', 'VIEW_INVERT_Y', 'bool', None, None, None),
 ]
 
 
@@ -7705,6 +7997,7 @@ CONFIG_CHOICES = {
     'brake.method': list(BRAKE_METHODS),
     'cruise.adjust': list(CRUISE_ADJUSTS),
     'debug.keys': [False, True],
+    'view.ref': list(VIEW_REFS),       # 0.1.47
 }
 CONFIG_NUMBERS = {   # 名前: (小さい刻み, 大きい刻み, 下限, 上限, 見せ方)
     'stick.anti_deadzone_x': (0.01, 0.05, 0.0, 0.5, 'pct'),
@@ -7712,6 +8005,8 @@ CONFIG_NUMBERS = {   # 名前: (小さい刻み, 大きい刻み, 下限, 上限
     'stick.anti_deadzone_z': (0.01, 0.05, 0.0, 0.5, 'pct'),
     'throttle.anti_deadzone': (0.01, 0.05, 0.0, 0.5, 'pct'),
     'stick.adz_buffer': (0.005, 0.02, 0.0, 0.2, 'pct1'),
+    'stick.deadzone_z': (0.01, 0.05, 0.0, 0.5, 'pct'),          # 0.1.47
+    'throttle.accel_threshold': (0.002, 0.01, 0.0, 0.2, 'num3'),   # 0.1.47
     'brake.max': (0.05, 0.20, 0.0, 1.0, 'pct'),
     'brake.curve': (0.1, 0.5, 0.2, 5.0, 'num'),
     'brake.smooth_sec': (0.02, 0.10, 0.0, 1.0, 'sec'),
@@ -7719,7 +8014,8 @@ CONFIG_NUMBERS = {   # 名前: (小さい刻み, 大きい刻み, 下限, 上限
 CONFIG_LABELS = {'hud.mode': 'HUD MODE', 'throttle.mode': 'THR MODE', 'brake.method': 'BRAKE TYPE', 'brake.max': 'BRAKE MAX',
                  'brake.curve': 'BRAKE CURVE', 'brake.smooth_sec': 'BRAKE SMOOTH', 'cruise.adjust': 'CRUISE ADJ',
                  'stick.anti_deadzone_x': 'ADZ ROLL', 'stick.anti_deadzone_y': 'ADZ PITCH', 'stick.anti_deadzone_z': 'ADZ YAW',
-                 'throttle.anti_deadzone': 'ADZ THR', 'stick.adz_buffer': 'ADZ BUFFER', 'debug.keys': 'KEYS'}
+                 'throttle.anti_deadzone': 'ADZ THR', 'stick.adz_buffer': 'ADZ BUFFER', 'debug.keys': 'KEYS',
+                 'stick.deadzone_z': 'DZ YAW', 'throttle.accel_threshold': 'THR PUSH', 'view.ref': 'VIEW REF'}
 
 
 def config_value_text(key, v):
@@ -7735,6 +8031,8 @@ def config_value_text(key, v):
             return '{:.1f}%'.format(float(v) * 100)
         if spec[4] == 'sec':
             return '{:.2f}S'.format(float(v))
+        if spec[4] == 'num3':
+            return '{:.3f}'.format(float(v))
         return '{:.1f}'.format(float(v))
     return str(v).upper()
 
@@ -7758,6 +8056,7 @@ def config_menu_folders(profiles, has_prev):
             '4': {'label': 'ADZ YAW', 'cfg': 'stick.anti_deadzone_z'},
             '5': {'label': 'ADZ THR', 'cfg': 'throttle.anti_deadzone'},
             '6': {'label': 'ADZ BUFFER', 'cfg': 'stick.adz_buffer'},
+            '7': {'label': 'DZ YAW', 'cfg': 'stick.deadzone_z'},             # 0.1.47
         },
         'throttle': {
             '2': {'label': 'THR MODE', 'cfg': 'throttle.mode'},
@@ -7772,6 +8071,8 @@ def config_menu_folders(profiles, has_prev):
             '3': {'label': 'HUD UP', 'act': 'cmd', 'cmd': 'hud_center_up'},
             '4': {'label': 'HUD DOWN', 'act': 'cmd', 'cmd': 'hud_center_down'},
             '5': {'label': 'HUD CENTER', 'act': 'cmd', 'cmd': 'hud_center_toggle'},
+            '6': {'label': 'VIEW REF', 'cfg': 'view.ref'},                         # 0.1.47
+            '7': {'label': 'POS RESET', 'act': 'cmd', 'cmd': 'hud_position_reset'},  # 0.1.47: 保存した HUD の位置を消す
         },
         'log': {
             '2': {'label': 'LOG SIZE', 'act': 'cmd', 'cmd': 'hud_log_cycle'},
@@ -7911,7 +8212,8 @@ class ConfigMode(object):
             small, big = CONFIG_NUMBERS[key][0], CONFIG_NUMBERS[key][1]
             kind = CONFIG_NUMBERS[key][4]
             fmt = ((lambda d: '{:+.0f}%'.format(d * 100)) if kind == 'pct' else
-                   (lambda d: '{:+.1f}%'.format(d * 100)) if kind == 'pct1' else (lambda d: '{:+.2f}'.format(d)))
+                   (lambda d: '{:+.1f}%'.format(d * 100)) if kind == 'pct1' else
+                   (lambda d: '{:+.3f}'.format(d)) if kind == 'num3' else (lambda d: '{:+.2f}'.format(d)))
             items = {'1': {'label': fmt(small), 'step': small}, '2': {'label': fmt(-small), 'step': -small},
                      '3': {'label': fmt(big), 'step': big}, '4': {'label': fmt(-big), 'step': -big},
                      '5': {'label': 'DEFAULT', 'reset': True}, '6': {'label': 'UNDO', 'undo': True}}
@@ -8114,6 +8416,7 @@ class ConfigMode(object):
 #     (0.1.37) HUD の描画スレッドが GL のテクスチャに上げて setOverlayTexture で渡す (HudPlateOverlay.panel_request)。
 #     HUD が無いとき (HUD を作れなかったとき) はパネルも出ない。
 #   - 配置は Q19: n 等分、1 番が真上、時計回り。境目の線の長さ・中心の円・文字までの距離は n によらず固定 (Q23)。
+#   - (0.1.47) 丸い線は描かず (PANEL_RINGS)、境目の斜線は両端を少し削る (PANEL_DIVIDER_TRIM)。選んでいる扇形は暗い緑で塗る。
 #   - 選んでいる項目の扇形を薄く塗る。書いていない番号 (エラーの NONE) は赤紫、NONE と REST は薄い色 (Q25、Q29-1)。
 #   - 上に今の階層 (パンくず) を出す。オンの項目の短いバー (Q23) は、項目のオン / オフをまだ持っていないので後で。
 #   - 十字キーモードの間、右パネルは動かない。隠すかは PANEL_HIDE_RIGHT_IN_POV (0.1.40 から既定は隠さない)。
@@ -8128,7 +8431,10 @@ PANEL_BG = (0, 0, 0, 110)                  # [CONFIG] (0.1.36) 背景の円の�
 PANEL_COLOR = HUD_COLOR_GREEN              # [CONFIG] (0.1.36) 線と文字の色
 PANEL_COLOR_DIM = (130, 255, 180, 110)     # [CONFIG] (0.1.36) NONE / REST の文字の色
 PANEL_COLOR_ERROR = (255, 0, 255, 255)     # [CONFIG] (0.1.36) エラーの NONE (書いていない番号) の色 (赤紫、Q29-1)
-PANEL_COLOR_SELECT = (130, 255, 180, 70)   # [CONFIG] (0.1.36) 選んでいる扇形の塗り
+PANEL_COLOR_SELECT = (0, 45, 25, 200)      # [CONFIG] (0.1.36) 選んでいる扇形の塗り。(0.1.47) 明るい緑 (130, 255, 180, 70) だと文字が読みにくいので、
+                                           #   暗い緑にした (ユーザー 2026-11-26)。色を付けない暗さだけなら (0, 0, 0, 200)
+PANEL_RINGS = False                        # [CONFIG] (0.1.47) 外と中心の丸い線を描く (0.1.46 までは描いていた)。SACC にならって消した (ユーザー 2026-11-26)
+PANEL_DIVIDER_TRIM = 0.10                  # [CONFIG] (0.1.47) 境目の斜線の両端を、線の長さのこの割合ずつ削る (0 = 中心の円から外の円まで)
 POV_MODE_NEEDS_EXTRA_TOUCH = True          # [CONFIG] (0.1.40) 十字キーモードに入るのは「左スティックのタッチ + POV_MODE_EXTRA_TOUCH_IDS (Y) のタッチ」のときだけ。False = 0.1.39 までと同じ (スティックのタッチかアプリメニューだけで入る)
 POV_MODE_EXTRA_TOUCH_IDS = [1]             # [CONFIG] (0.1.40) 一緒に触れているボタンの番号 (openvr の EVRButtonId)。0.1.41: 1 = k_EButton_ApplicationMenu = 左 Y ボタン (実機で確かめた。7 = X)
 PANEL_HIDE_RIGHT_IN_POV = False            # [CONFIG] (0.1.36) 十字キーモードの間、右パネルを隠す (0.1.40: 既定は隠さない。にいちごさんの決定)
@@ -8248,12 +8554,15 @@ def draw_panel_image(ps, fonts, size=None):
         i = int(ps.selected) - 1
         a0, a1 = i * w - w / 2.0, i * w + w / 2.0
         d.polygon(_panel_ring(c, R, a0, a1, 24) + _panel_ring(c, r_in, a1, a0, 12), fill=PANEL_COLOR_SELECT)
-    d.line(_panel_ring(c, R, 0, 360, 96), fill=PANEL_COLOR, width=lw)
-    d.line(_panel_ring(c, r_in, 0, 360, 48), fill=PANEL_COLOR, width=lw)
+    if PANEL_RINGS:
+        d.line(_panel_ring(c, R, 0, 360, 96), fill=PANEL_COLOR, width=lw)
+        d.line(_panel_ring(c, r_in, 0, 360, 48), fill=PANEL_COLOR, width=lw)
     if n > 1:
+        trim = (R - r_in) * max(0.0, min(0.45, float(PANEL_DIVIDER_TRIM)))     # 0.1.47: 両端を削る
+        r0, r1 = r_in + trim, R - trim
         for i in range(n):
             a = math.radians(i * w - w / 2.0)
-            d.line([(c + r_in * math.sin(a), c - r_in * math.cos(a)), (c + R * math.sin(a), c - R * math.cos(a))],
+            d.line([(c + r0 * math.sin(a), c - r0 * math.cos(a)), (c + r1 * math.sin(a), c - r1 * math.cos(a))],
                    fill=PANEL_COLOR, width=lw)
     # 文字 (扇形の幅に収まるまで小さくする)
     max_w = S * 0.30 if n <= 2 else min(S * 0.30, 2.0 * r_lab * math.sin(math.radians(w / 2.0)) * 0.92)
@@ -8430,7 +8739,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         if not INPUT_BINDINGS_ENABLED or self.bus is None:
             return
         try:
-            self.inputs = InputLayer(self, self.bus, profile=load_input_profile(INPUT_PROFILE_FILE))
+            self.inputs = InputLayer(self, self.bus, profile=load_input_profile(startup_profile_file()))   # 0.1.47: 前回のものを引き継ぐ
             # 割り当ての既定値が _virtualpad.py の BUTTONS と食い違っていないか (どちらかを直したとき用)
             try:
                 from steam_vr_wheel._virtualpad import BUTTONS as _vp_buttons
@@ -8493,6 +8802,8 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         if not keep_prev and cur and cur != name:
             self.cfgmode.prev_profile = cur
         print("[Input] プロファイルを切り替えました: {} ({})".format(prof['name'], name))
+        if not keep_prev:
+            save_user_setting('profile.last', os.path.basename(name), None)   # 0.1.47: 次の起動でこれを読む
         self._print_input_layer()
         self._make_drive_assist()          # 0.1.42: ブレーキとクルーズも新しい settings で作り直す (クルーズは切れる)
         return True
@@ -8545,10 +8856,13 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         now = time.time()
         if not self._user_applied and self.hud is not None and getattr(self.hud, 'initialized', False):
             self._user_applied = True
-            mode = load_user_settings(None).get('hud.mode')
+            us = load_user_settings(None)
+            mode = us.get('hud.mode')
             if mode:
                 print("[Config] users/vc_user.json の HUD MODE {} を使います".format(str(mode).upper()))
                 self.hud.set_mode(mode)
+            if isinstance(us.get('hud.position'), dict) and hasattr(self.hud, 'apply_position'):   # 0.1.47
+                self.hud.apply_position(us['hud.position'])
         g = self.cfgmode.gesture.frame(lx, ly, rx, ry, now, allowed=not self.is_pov_mode)
         if g == 'toggle' or (self._config_request and not self.cfgmode.active):
             if self._config_request:
@@ -8609,6 +8923,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             if ev[0] == 'lever_to':
                 self._throttle_lever_to(ev[1])
         self.throttle_z.cruise_active = a.cruise_on
+        self.throttle_z.accel_threshold = a.cfg['throttle.accel_threshold']   # 0.1.47
         self.cruise_center = a.cruise_center
         out = a.throttle_outputs(self.throttle_z.x)
         tadz, tbuf = a.cfg['throttle.anti_deadzone'], a.cfg['stick.adz_buffer']
@@ -8783,12 +9098,80 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         if hand == 'right' and button == openvr.k_EButton_Grip and (not self.config.joystick_grabbing_switch):
             self.joystick_grabbed = False
 
+    def _view_rxry(self, thr_x, thr_y):
+        """(0.1.47) vJoy の RX / RY に出す値 (0〜1)。VIEW (命令 'view') の間は頭の向き、それ以外はスロットル
+        ('throttle.rxry_output' が false なら中央 0.5)。頭の向きが取れないフレームは、最後に取れた値を使う。"""
+        a = getattr(self, 'assist', None)
+        c = a.cfg if a is not None else {}
+        if c.get('throttle.rxry_output', THROTTLE_RXRY_OUTPUT):
+            rx, ry = thr_x, thr_y
+        else:
+            rx, ry = 0.5, 0.5
+        if not getattr(self, '_view_holders', None):
+            self._view_last = None
+            return rx, ry
+        ang = self._view_angles(c.get('view.ref', VIEW_REF))
+        if ang is None:
+            ang = getattr(self, '_view_last', None)
+            if ang is None:
+                return 0.5, 0.5
+        self._view_last = ang
+        dz = float(c.get('view.deadzone_deg', VIEW_DEADZONE_DEG))
+
+        def axis(deg, rng, inv):
+            a_ = abs(deg)
+            if a_ <= dz:
+                return 0.5
+            v = min(1.0, (a_ - dz) / max(1e-6, float(rng) - dz))
+            v = v if deg > 0 else -v
+            return 0.5 + (-v if inv else v) / 2.0
+
+        return (axis(ang[0], c.get('view.range_yaw_deg', VIEW_RANGE_YAW_DEG), c.get('view.invert_x', VIEW_INVERT_X)),
+                axis(ang[1], c.get('view.range_pitch_deg', VIEW_RANGE_PITCH_DEG), c.get('view.invert_y', VIEW_INVERT_Y)))
+
+    def _view_angles(self, ref):
+        """(0.1.47) 頭の向きの (左右, 上下) [度] (右 +、上 +)。ref = 'room' はルームの正面 (シート座標の -Z) から、
+        'hud' は基準の目から HUD の中心 (部品のまとまりの真ん中) を見た向きから。取れなければ None。"""
+        try:
+            p = _read_head_pose(0.0)
+        except Exception as e:
+            if not getattr(self, '_view_warned', False):
+                self._view_warned = True
+                print("[View] Warning: 頭の向きを読めません: {}".format(e))
+            return None
+        if p is None:
+            return None
+        rot = p[1]
+        fx, fy, fz = -rot[0][2], -rot[1][2], -rot[2][2]           # 頭の正面 (頭の座標の -Z) をシート座標で
+        yaw = math.degrees(math.atan2(fx, -fz))
+        pitch = math.degrees(math.atan2(fy, math.hypot(fx, fz)))
+        hud = self.hud
+        if ref == 'hud' and hud is not None:
+            try:
+                e0 = hud._base_eye()
+                lay = hud.layout
+                wc = getattr(lay, 'core_center', None) or lay.window_center
+                cx, cy, cz = hud.x + wc[0] * hud.mpp, hud.y - wc[1] * hud.mpp, hud.z
+                dx, dy, dz_ = cx - e0[0], cy - e0[1], cz - e0[2]
+                yaw -= math.degrees(math.atan2(dx, -dz_))
+                pitch -= math.degrees(math.atan2(dy, math.hypot(dx, dz_)))
+            except Exception as e:
+                if not getattr(self, '_view_hud_warned', False):
+                    self._view_hud_warned = True
+                    print("[View] Warning: HUD の中心の向きが取れないので、ルームの正面を基準にします: {}".format(e))
+        yaw = (yaw + 180.0) % 360.0 - 180.0
+        return (yaw, pitch)
+
     def _adz_axes(self, x, y, z):
-        """(0.1.45) 操縦桿の 3 軸にアンチデッドゾーンをかける (DriveAssist の設定。無ければそのまま)。"""
+        """(0.1.45) 操縦桿の 3 軸にアンチデッドゾーンをかける (DriveAssist の設定。無ければそのまま)。
+        (0.1.47) その前にデッドゾーン (stick.deadzone_x/y/z) をかける。"""
         a = getattr(self, 'assist', None)
         if a is None:
             return x, y, z
         c = a.cfg
+        x = deadzone_centered(x, c['stick.deadzone_x'])
+        y = deadzone_centered(y, c['stick.deadzone_y'])
+        z = deadzone_centered(z, c['stick.deadzone_z'])
         buf = c['stick.adz_buffer']
         return (anti_deadzone_centered(x, c['stick.anti_deadzone_x'], buf),
                 anti_deadzone_centered(y, c['stick.anti_deadzone_y'], buf),
@@ -8953,7 +9336,7 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
     #     joystick.debug_command('hud_stats')
     # 呼ぶのは Joystick.update() と同じスレッドから (今はキー入力もそこで処理している)。
     DEBUG_COMMANDS = [   # (名前, 説明)。並び順 = 一覧の表示順
-        ('hud_recenter', "HUD 奥行き表示の基準の目の位置を今の頭の位置にする (このセッションだけ)"),
+        ('hud_recenter', "HUD 奥行き表示の基準の目の位置を今の頭の位置にする (0.1.47 から users/vc_user.json に保存)"),
         ('hud_cycle_mode', "HUD の見せ方を 'fakefar' → 'far' → 'plate' の順に切り替える"),
         ('hud_stats', "HUD の統計を 5 秒ごとに表示 / やめる"),
         ('hud_diagnose', "頭の姿勢の届き方を 3 秒測る"),
@@ -8981,8 +9364,9 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
         ('hud_fixed_ref', "検証用: 'fakefar' の絵を基準の目の形で描き、頭の動きはずらしで直す (入 / 切)"),
         ('hud_crosshair', "検証用: 基準の目の真正面 (HUD の中心) の十字線を出す / 隠す"),
         ('hud_center_toggle', "HUD の中心を 低い位置 (フラットのゲーム向け) ⇔ 目の真正面 (SACC と同じ) に切り替える"),
-        ('hud_center_down', "HUD を少し下へ (HUD_CENTER_NUDGE_M。このセッションだけ。固定する値をコンソールに出す)"),
+        ('hud_center_down', "HUD を少し下へ (HUD_CENTER_NUDGE_M。0.1.47 から users/vc_user.json に保存)"),
         ('hud_center_up', "HUD を少し上へ (同上)"),
+        ('hud_position_reset', "(0.1.47) 保存した HUD の位置 (上下・中心・RECENTER の目) を消して [CONFIG] の値に戻す"),
     ]
 
     def debug_command(self, name):
@@ -9050,6 +9434,9 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             hud_toggle_fixed_ref()
         elif name == 'hud_crosshair':
             hud_toggle_crosshair()
+        elif name == 'hud_position_reset':
+            if hud is not None and hasattr(hud, 'reset_position'):
+                hud.reset_position()
         elif name == 'hud_center_toggle':
             if hud is not None and hasattr(hud, 'set_center'):
                 hud.set_center('eye' if hud.center == 'low' else 'low')
@@ -9354,8 +9741,9 @@ class Joystick(RightTrackpadAxisDisablerMixin, LeftTrackpadAxisDisablerMixin, Vi
             self.throttle_x.update(left_ctr.yaw)
 
         drive = self._drive_frame(self.throttle_z.x)                   # 0.1.42: RZ (と B モードの SL0 / SL1) はクルーズとブレーキを入れて書く
-        self.device.set_axis(HID_USAGE_RY, self._clamp_vjoy(self.throttle_y.x * 0x8000))
-        self.device.set_axis(HID_USAGE_RX, self._clamp_vjoy(self.throttle_x.x * 0x8000))
+        out_rx, out_ry = self._view_rxry(self.throttle_x.x, self.throttle_y.x)   # 0.1.47: VIEW の間は頭の向き。スロットルの RX / RY は切れる
+        self.device.set_axis(HID_USAGE_RY, self._clamp_vjoy(out_ry * 0x8000))
+        self.device.set_axis(HID_USAGE_RX, self._clamp_vjoy(out_rx * 0x8000))
 
         if self.bus is not None:
             self.bus.tick()            # INPUT_BUS_REFRESH_SEC ごとに今の値を全部書き直す

@@ -27,6 +27,13 @@ VC コンソール (vc_gui.py): PC の画面に出す設定とログの窓。別
                 そのほかの割り当ての一覧 (input / command / args)。
   5. パネル     "panels" (left_game / right_game) の木と項目のフォームと丸い見本 (左右 2 つ並べる)。警告の一覧は変えるたびに作り直す。
 
+■ 0.1.5 の足したもの (_joystick.py v0.1.47 の形に合わせた)
+  - プロファイルの欄 (選び・再読込・保存) を、どのタブでも窓の上に出す。選ぶと、動いているコクピットにも profile_load を送る
+    (SWITCH_COCKPIT_ON_CHOOSE)。起動したときは、動いているコクピットのプロファイルを開く (--profile を書いたときはそちら)。
+  - パネルの項目の命令に key (キーボードのキー。欄にキーの名前を書く) と view (押している間、頭の向きを RX / RY へ) を足した。
+    割り当ての命令にも key と view を足した。
+  - 設定: stick.deadzone_x/y/z (デッドゾーン)、throttle.accel_threshold (黄色の領域に入る押し込み)、throttle.rxry_output、view.*。
+
 ■ 0.1.4 の足したもの (_joystick.py v0.1.46 の形に合わせた)
   - 「ボタン」タブ: 表の 1 行 = 物理の入力 1 つ。選ぶと unbind (既定の割り当てを外す) と bindings (自分の割り当て) を書く。
     unbind は既定の割り当てだけを外し、プロファイルの bindings は外さない。だから「置き換え」= unbind + bindings、「出さない」= unbind だけ。
@@ -69,7 +76,7 @@ import time
 
 import wx
 
-VC_GUI_VERSION = '0.1.4'
+VC_GUI_VERSION = '0.1.5'
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(PACKAGE_DIR, 'media', 'vc_log.txt')
@@ -78,6 +85,7 @@ STATUS_PATH = os.path.join(PACKAGE_DIR, 'media', 'vc_status.json')      # 本体
 CMD_PATH = os.path.join(PACKAGE_DIR, 'media', 'vc_cmd.txt')             # この窓が足す命令
 ALIVE_PATH = os.path.join(PACKAGE_DIR, 'media', 'vc_gui_alive.txt')     # この窓が 1 秒ごとに書く生存の印
 DEFAULT_PROFILE_FILE = 'default.json'
+SWITCH_COCKPIT_ON_CHOOSE = True   # [CONFIG] 0.1.5: 上のプロファイル欄で選んだら、動いているコクピット (VR 内) もそのプロファイルに切り替える
 
 LOG_POLL_MS = 250                       # [CONFIG] ログを読みに行く間隔 (ミリ秒)
 LOG_MAX_LINES = 3000                    # [CONFIG] 窓に残す行の数
@@ -94,7 +102,36 @@ PANEL_SLOT_MAX = 8                      # 1 つの階層に置けるスロット
 PANEL_BACK_SLOT = '1'                   # 下の階層で「戻る」に予約されている番号
 ITEM_KEY_ORDER = ['label', 'glyph', 'type', 'folder', 'command', 'args', 'exec', 'hold', 'block_a', 'latch', 'hud']
 TOP_KEY_ORDER = ['format', 'format_version', 'profile', 'settings', 'input', 'panels']
-PANEL_COMMANDS = ['vjoy_button', 'brake', 'cruise', 'config']   # 0.1.1: 'config' = コンフィグモードへ
+PANEL_COMMANDS = ['vjoy_button', 'brake', 'cruise', 'config', 'key', 'view']   # 0.1.1: 'config' = コンフィグモードへ。0.1.5: 'key' = キーボード、'view' = 頭の向きを RX / RY へ
+# 0.1.5: 命令 'key' に書けるキーの名前 (_joystick.py の KEY_SCANCODES と同じ。'sc:0x1E' の形も書ける)
+KEY_NAMES = ['ESC', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'MINUS', 'EQUALS', 'BACKSPACE', 'TAB',
+             'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', 'LBRACKET', 'RBRACKET', 'ENTER', 'LCTRL',
+             'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', 'SEMICOLON', 'APOSTROPHE', 'GRAVE', 'LSHIFT', 'BACKSLASH',
+             'Z', 'X', 'C', 'V', 'B', 'N', 'M', 'COMMA', 'PERIOD', 'SLASH', 'RSHIFT', 'NUMPAD_MULTIPLY', 'LALT', 'SPACE',
+             'CAPSLOCK', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+             'NUMPAD7', 'NUMPAD8', 'NUMPAD9', 'NUMPAD_MINUS', 'NUMPAD4', 'NUMPAD5', 'NUMPAD6', 'NUMPAD_PLUS',
+             'NUMPAD1', 'NUMPAD2', 'NUMPAD3', 'NUMPAD0', 'NUMPAD_PERIOD', 'NUMPAD_ENTER', 'RCTRL', 'NUMPAD_DIVIDE', 'RALT',
+             'HOME', 'UP', 'PGUP', 'LEFT', 'RIGHT', 'END', 'DOWN', 'PGDN', 'INSERT', 'DELETE']
+
+
+def is_key_name(name):
+    """0.1.5: 命令 'key' に書けるキーの名前か。"""
+    s = str(name).strip().upper()
+    if s.startswith('SC:'):
+        try:
+            v = int(s[3:], 0)
+        except ValueError:
+            return False
+        return 0 < v <= 0xFF or 0xE000 < v <= 0xE0FF
+    return s in KEY_NAMES
+
+
+def key_args_names(args):
+    if isinstance(args.get('keys'), list):
+        return [str(k) for k in args['keys']]
+    if 'key' in args:
+        return [str(args['key'])]
+    return []
 CRUISE_ACTIONS = ['toggle', 'on', 'off', 'center']
 HUD_MARKS = ['mnvr', 'brake']
 VJOY_AXES = ['HID_USAGE_X', 'HID_USAGE_Y', 'HID_USAGE_Z', 'HID_USAGE_RX',
@@ -140,7 +177,7 @@ ZONE_DEFAULT_RANGE = {'left': (4, 8), 'right': (12, 16)}      # 区画ボタン�
 INPUT_PARTS = ['menu', 'grip', 'stick_click', 'trigger', 'a', 'trigger_touch', 'trigger_value',
                'trigger_half', 'trigger_full', 'stick_dir', 'pov_mode']       # 左右それぞれにある入力の名前 (bN は別に数える)
 INPUT_ALIASES = {'left.x': 'left.a', 'left.y': 'left.menu', 'right.b': 'right.menu'}   # 別名 -> 中の名前
-BIND_COMMANDS = ['vjoy_button', 'vjoy_zone_button', 'vjoy_axis', 'vjoy_dpad', 'panel_execute']
+BIND_COMMANDS = ['vjoy_button', 'vjoy_zone_button', 'vjoy_axis', 'vjoy_dpad', 'panel_execute', 'key', 'view']   # 0.1.5: 'key'、'view'
 INPUT_BASES = ['default', 'none']
 BIND_TABLE_ROWS = [      # (入力の名前, 画面の名前)。表の 1 行 = 物理の入力 1 つ
     ('left.a', '左 X  (left.a)'), ('left.menu', '左 Y  (left.menu)'), ('left.grip', '左 グリップ  (left.grip)'),
@@ -292,6 +329,26 @@ SETTING_SPECS = [
           lo=0.0, hi=0.5, step=0.01),
     _spec('stick.adz_buffer', 'アンチデッドゾーンの無視幅', 'float', 0.02,
           'これより小さい入力は 0 のまま (手のぶれでふらつかないように)。', lo=0.0, hi=0.2, step=0.005),
+    _spec('stick.deadzone_x', 'デッドゾーン: 左右 (ロール)', 'float', 0.0,
+          '中央からこの量までの倒しは 0 にする。その外は端まで引き伸ばす (アンチデッドゾーンとは逆。先にこちらをかける)。',
+          lo=0.0, hi=0.5, step=0.01),
+    _spec('stick.deadzone_y', 'デッドゾーン: 前後 (ピッチ)', 'float', 0.0,
+          '中央からこの量までの倒しは 0 にする。その外は端まで引き伸ばす。', lo=0.0, hi=0.5, step=0.01),
+    _spec('stick.deadzone_z', 'デッドゾーン: ひねり (ヨー)', 'float', 0.0,
+          '中央からこの量までのひねりは 0 にする (ヨーがすぐ入ってしまうとき)。その外は端まで引き伸ばす。', lo=0.0, hi=0.5, step=0.01),
+    _spec('throttle.accel_threshold', 'スロットル: 黄色に入る押し込み', 'float', 0.018,
+          '約 80% の所で止まったレバーを、この速さ以上で押し込むと黄色の領域 (100% まで) に入る。'
+          '1 フレームの動き [m] × 感度。小さいほど入りやすい (0〜0.2)。', lo=0.0, hi=0.2, step=0.002),
+    _spec('throttle.rxry_output', 'スロットルの RX / RY を出す', 'bool', True,
+          'false = 左手のひねり (RX) と前後 (RY) を vJoy へ出さない (RX / RY は中央)。VIEW で視点に使うとき向け。'),
+    _spec('view.ref', 'VIEW: 頭の向きの基準', 'choice', 'hud',
+          'VIEW の項目を実行している間、頭の向きを RX / RY に出す。hud = HUD の中心を見た向きが 0。room = ルームの正面 (着座位置のリセットの向き) が 0。',
+          choices=['hud', 'room']),
+    _spec('view.range_yaw_deg', 'VIEW: 左右の角度', 'float', 90.0, '頭を左右にこの角度 [度] 向けたら RX が端。', lo=10.0, hi=180.0, step=5.0),
+    _spec('view.range_pitch_deg', 'VIEW: 上下の角度', 'float', 60.0, '頭を上下にこの角度 [度] 向けたら RY が端。', lo=10.0, hi=90.0, step=5.0),
+    _spec('view.deadzone_deg', 'VIEW: 中央の遊び', 'float', 3.0, 'この角度 [度] までの向きは中央 (0) にする。', lo=0.0, hi=30.0, step=0.5),
+    _spec('view.invert_x', 'VIEW: 左右を逆に', 'bool', False, 'true = 右を向くと RX が小さくなる。'),
+    _spec('view.invert_y', 'VIEW: 上下を逆に', 'bool', False, 'true = 上を向くと RY が小さくなる。'),
     _spec('dpad.buttons', '十字キーのボタン', 'intlist4_or_null', None,
           'null = 十字キーは POV だけ。[上, 下, 左, 右] のボタン番号 (1〜128) をカンマで 4 つ書くと、ボタンでも出す。空欄 = null。'),
     _spec('input.trigger_half', 'トリガー: 半押しの深さ', 'float', 0.25,
@@ -676,6 +733,10 @@ def describe_binding(cmd, args):
         return 'パネル実行 {}'.format(args.get('panel'))
     elif cmd == 'vjoy_dpad':
         return '十字キー'
+    elif cmd == 'key' and key_args_names(args):
+        return 'キー {}'.format('+'.join(key_args_names(args)))
+    elif cmd == 'view':
+        return 'VIEW (頭の向き → RX/RY)'
     elif cmd == 'vjoy_zone_button':
         b = args.get('buttons')
         if isinstance(b, list) and len(b) == 5:
@@ -877,6 +938,13 @@ def validate_binding_row(input_name, command, args_text):
             warnings.append('vjoy_axis の axis は {} のどれかです'.format(', '.join(VJOY_AXES)))
         if command == 'panel_execute' and args.get('panel') not in ('left_game', 'right_game'):
             warnings.append("panel_execute の panel は 'left_game' か 'right_game' です")
+        if command == 'key':
+            names = key_args_names(args)
+            if not names:
+                warnings.append('key には key (例 "1") か keys (例 ["LSHIFT", "1"]) が要ります')
+            for k in names:
+                if not is_key_name(k):
+                    warnings.append('知らないキーの名前です: {!r}'.format(k))
     return errors, warnings, args
 
 
@@ -1145,6 +1213,13 @@ def _check_item(where, row, is_left, out):
         act = args.get('action', 'toggle')
         if act not in CRUISE_ACTIONS:
             out.append(('warn', where, "cruise の action は {} のどれかです ({!r})".format(', '.join(CRUISE_ACTIONS), act)))
+    elif cmd == 'key':
+        names = key_args_names(args)
+        if not names:
+            out.append(('warn', where, 'key に key か keys がありません'))
+        for k in names:
+            if not is_key_name(k):
+                out.append(('warn', where, '知らないキーの名前です ({!r})'.format(k)))
 
 
 def _check_table(side_label, fname, table, root, is_left, out):
@@ -2774,6 +2849,12 @@ class PanelTab(wx.Panel):
         self.lbl_vjoy = _gray(wx.StaticText(p, label='1〜128。同時押しはカンマで区切る (例 3,5)。1 つなら {"button": N}、複数なら {"buttons": [..]}。'))
         v.Add(vj, 0, wx.EXPAND)
         v.Add(self.lbl_vjoy, 0, wx.LEFT, 130)
+        # args: key (0.1.5)
+        self.pnl_key, self.txt_keys = self._mk_row(p, 'キー', lambda q: wx.TextCtrl(q, size=(160, -1)))
+        v.Add(self.pnl_key, 0, wx.EXPAND | wx.ALL, 2)
+        self.lbl_key = _gray(wx.StaticText(p, label='キーボードのキー (例 1、F1、LSHIFT)。同時押しはカンマで区切る (例 LSHIFT,1)。'
+                                                     'ゲームの窓が前にあるときだけ届く。'))
+        v.Add(self.lbl_key, 0, wx.LEFT, 130)
         # args: brake
         self.pnl_brake = wx.Panel(p)
         bv = wx.BoxSizer(wx.VERTICAL)
@@ -2812,6 +2893,7 @@ class PanelTab(wx.Panel):
         self.ch_folder.Bind(wx.EVT_CHOICE, self.on_form)
         self.ch_cmd.Bind(wx.EVT_CHOICE, self.on_command)
         self.txt_buttons.Bind(wx.EVT_TEXT, self.on_form)
+        self.txt_keys.Bind(wx.EVT_TEXT, self.on_form)
         self.ch_action.Bind(wx.EVT_CHOICE, self.on_form)
         for c in (self.ch_exec, self.ch_hold, self.ch_blocka, self.ch_latch, self.ch_hud):
             c.Bind(wx.EVT_CHOICE, self.on_form)
@@ -3066,6 +3148,9 @@ class PanelTab(wx.Panel):
         # args の部品
         self.pnl_vjoy.Show(show_cmd and cmd == 'vjoy_button')
         self.lbl_vjoy.Show(show_cmd and cmd == 'vjoy_button')
+        self.pnl_key.Show(show_cmd and cmd == 'key')
+        self.lbl_key.Show(show_cmd and cmd == 'key')
+        self.txt_keys.ChangeValue(','.join(key_args_names(args)))
         self.pnl_brake.Show(show_cmd and cmd == 'brake')
         self.pnl_cruise.Show(show_cmd and cmd == 'cruise')
         self.lbl_cruise.Show(show_cmd and cmd == 'cruise')
@@ -3278,6 +3363,18 @@ class PanelTab(wx.Panel):
                     args['button'] = nums[0]
                 elif len(nums) > 1:
                     args['buttons'] = nums
+        elif cmd == 'key':
+            names = [p.strip().upper() for p in self.txt_keys.GetValue().replace('、', ',').split(',') if p.strip()]
+            bad = [k for k in names if not is_key_name(k)]
+            if bad:
+                self.frame.set_status('知らないキーの名前です: {} (今の入力は保存に入れていません)'.format(', '.join(bad)))
+            else:
+                args.pop('key', None)
+                args.pop('keys', None)
+                if len(names) == 1:
+                    args['key'] = names[0]
+                elif len(names) > 1:
+                    args['keys'] = names
         elif cmd == 'brake':
             for row in self.brake_rows:
                 k = row.spec['key'][len('brake.'):]
@@ -3534,7 +3631,7 @@ class MainFrame(wx.Frame):
         root = wx.Panel(self)
         # コクピットの状態の帯 (どのタブでも出す)
         self.head_st = _bold(wx.StaticText(root, label=cockpit_summary(None)))
-        # プロファイルの選び (プロファイル・ボタン・パネルのタブだけに出す)
+        # プロファイルの選び (0.1.5: どのタブでも出す。選ぶと VR 内のプロファイルも切り替える (SWITCH_COCKPIT_ON_CHOOSE))
         self.bar = wx.Panel(root)
         bh = wx.BoxSizer(wx.HORIZONTAL)
         bh.Add(wx.StaticText(self.bar, label='プロファイル:'), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
@@ -3576,9 +3673,15 @@ class MainFrame(wx.Frame):
         self.nb.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self.on_page)
         self.Bind(wx.EVT_CLOSE, self.on_close)
 
+        if not first_profile:                       # 0.1.5: 動いているコクピットのプロファイルから始める
+            try:
+                st0 = read_cockpit_status(self.status_path)
+                if st0 and st0.get('profile_file'):
+                    first_profile = os.path.basename(str(st0['profile_file']))
+            except Exception:
+                pass
         self.fill_profile_choice(select_name=first_profile or DEFAULT_PROFILE_FILE)
         self.load_selected(ask=False)
-        self.bar.Show(False)
         root.Layout()
 
         # 1 秒ごとに、生存の印を書き、本体の状態を読む
@@ -3638,9 +3741,7 @@ class MainFrame(wx.Frame):
             self.set_status('自動の読み直しに失敗: {}'.format(e))
 
     def on_page(self, event):
-        page = self.nb.GetCurrentPage()
-        self.bar.Show(page is self.settings_tab or page is self.button_tab or page is self.panel_tab)
-        self.bar.GetParent().Layout()
+        page = self.nb.GetCurrentPage()      # 0.1.5: プロファイルの欄はどのタブでも出したまま
         if page is self.button_tab:
             try:
                 self.button_tab.refresh()       # プロファイルのタブで settings を変えたあとに合わせる
@@ -3705,6 +3806,24 @@ class MainFrame(wx.Frame):
                 self.ch_profile.SetSelection(self.profile_paths.index(self.model.path))
             return
         self.load_selected()
+        self.switch_cockpit_to_model()
+
+    def switch_cockpit_to_model(self):
+        """0.1.5: 開いたプロファイルを、動いているコクピット (VR 内) でも使う (profiles フォルダのファイルのときだけ)。"""
+        if not SWITCH_COCKPIT_ON_CHOOSE or not self.model.path:
+            return
+        st = self.cockpit_status
+        if st is None:
+            return
+        if os.path.normcase(os.path.abspath(os.path.dirname(self.model.path))) != os.path.normcase(os.path.abspath(PROFILE_DIR)):
+            return
+        if same_profile_file(self.model.path, st.get('profile_file')):
+            return
+        name = os.path.basename(self.model.path)
+        if self.send_cmd({'cmd': 'profile_load', 'file': name}):
+            msg = 'コクピットも {} に切り替えました'.format(name)
+            self.set_status(msg)
+            self.log_tab.add_note(msg)
 
     def on_reload(self, event):
         if not self.confirm_discard():
